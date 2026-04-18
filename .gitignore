@@ -9,4 +9,11 @@ dist/
 .buildozer/
 *.spec.bak
 .env
+# Mobile app (Kivy) - local only
+src/
+config/
+tests/
+buildozer.spec
+requirements.txt
+README.md
 
