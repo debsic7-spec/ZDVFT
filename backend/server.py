@@ -110,6 +110,16 @@ def get_asset_data(isin: str):
     if isin not in ASSET_MAPPING:
         raise HTTPException(status_code=404, detail="Asset not found")
 
+    try:
+        return _get_asset_data_impl(isin)
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {str(e)}")
+
+def _get_asset_data_impl(isin: str):
     name, ticker = ASSET_MAPPING[isin]
     stock = yf.Ticker(ticker)
 
