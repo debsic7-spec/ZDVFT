@@ -56,6 +56,7 @@
                 <span>API Offline</span>
             </div>
             <div class="refresh-countdown" id="refresh-countdown">
+                <span class="market-badge closed" id="market-badge">Marché</span>
                 <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
                 <span>Refresh dans <b id="countdown-sec">30</b>s</span>
             </div>
@@ -146,6 +147,14 @@
                             <span class="toggle-label vwap">VWAP</span>
                         </label>
                         <label class="indicator-toggle">
+                            <input type="checkbox" id="show-sma">
+                            <span class="toggle-label sma">SMA</span>
+                        </label>
+                        <label class="indicator-toggle">
+                            <input type="checkbox" id="show-bb">
+                            <span class="toggle-label bb">BB</span>
+                        </label>
+                        <label class="indicator-toggle">
                             <input type="checkbox" id="show-volume">
                             <span class="toggle-label vol">VOL</span>
                         </label>
@@ -161,6 +170,18 @@
                 <!-- Volume Chart -->
                 <div class="volume-wrapper" id="volume-panel" style="display:none;">
                     <canvas id="volumeChart"></canvas>
+                </div>
+
+                <!-- RSI Sub-Chart -->
+                <div class="subchart-wrapper">
+                    <div class="subchart-label">RSI (14)</div>
+                    <canvas id="rsiChart"></canvas>
+                </div>
+
+                <!-- MACD Sub-Chart -->
+                <div class="subchart-wrapper">
+                    <div class="subchart-label">MACD</div>
+                    <canvas id="macdChart"></canvas>
                 </div>
 
                 <!-- Stats Row -->

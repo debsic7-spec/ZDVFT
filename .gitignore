@@ -17,4 +17,5 @@ buildozer.spec
 # Keep root requirements.txt for Railway (ignore the Kivy one)
 /README.md
 check_*.py
+backup_v1/
 

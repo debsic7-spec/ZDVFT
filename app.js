@@ -12,35 +12,78 @@ const STATE = {
     allAssets: [],
     priceChart: null,
     volumeChart: null,
+    rsiChart: null,
+    macdChart: null,
     currentTimeframe: '1d',
     chartType: 'line',
     currentData: null,
     apiOnline: false,
     refreshInterval: null,
     countdownInterval: null,
-    lastPrice: null
+    lastPrice: null,
+    marketOpen: true,
+    searchTimeout: null
 };
 
 /* =================== INIT =================== */
 document.addEventListener('DOMContentLoaded', async () => {
     setupNavigation();
     initCharts();
+    initSubCharts();
     setupControls();
     setupPortfolio();
     await bootApp();
     startAutoRefresh();
+    checkMarketStatus();
     // Force clear old service workers and caches on load
     if ('serviceWorker' in navigator) {
         navigator.serviceWorker.getRegistrations().then(regs => {
             regs.forEach(r => r.unregister());
         });
         caches.keys().then(keys => {
-            keys.forEach(k => {
-                if (k !== 'pea-tracker-v3') caches.delete(k);
-            });
+            keys.forEach(k => caches.delete(k));
         });
     }
 });
+
+/* =================== TOAST NOTIFICATIONS =================== */
+function showToast(message, type = 'error', duration = 4000) {
+    let container = document.getElementById('toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'toast-container';
+        container.style.cssText = 'position:fixed;top:16px;right:16px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
+        document.body.appendChild(container);
+    }
+    const toast = document.createElement('div');
+    const colors = { error: '#ef4444', success: '#22c55e', warn: '#f59e0b', info: '#6366f1' };
+    toast.style.cssText = `pointer-events:auto;padding:12px 20px;border-radius:10px;color:#fff;font:600 13px/1.4 'Inter',sans-serif;background:${colors[type] || colors.info};box-shadow:0 4px 20px rgba(0,0,0,0.4);opacity:0;transform:translateX(30px);transition:all 0.3s ease;max-width:340px;`;
+    toast.textContent = message;
+    container.appendChild(toast);
+    requestAnimationFrame(() => { toast.style.opacity = '1'; toast.style.transform = 'translateX(0)'; });
+    setTimeout(() => {
+        toast.style.opacity = '0'; toast.style.transform = 'translateX(30px)';
+        setTimeout(() => toast.remove(), 300);
+    }, duration);
+}
+
+/* =================== MARKET STATUS =================== */
+async function checkMarketStatus() {
+    try {
+        const res = await fetch(`${API_URL}/market-status`);
+        if (res.ok) {
+            const s = await res.json();
+            STATE.marketOpen = s.open;
+            const badge = document.getElementById('market-badge');
+            if (badge) {
+                badge.textContent = s.open ? `Marché ouvert · ${s.time_cet}` : `Marché fermé · ${s.time_cet}`;
+                badge.className = `market-badge ${s.open ? 'open' : 'closed'}`;
+            }
+        }
+    } catch(e) {}
+    // Re-check every 5 minutes
+    setTimeout(checkMarketStatus, 5 * 60 * 1000);
+}
 
 /* =================== NAVIGATION =================== */
 function setupNavigation() {
@@ -97,17 +140,14 @@ async function bootApp() {
 function startAutoRefresh() {
     const INTERVAL = 30; // seconds
     let remaining = INTERVAL;
-
     const countEl = document.getElementById('countdown-sec');
 
-    // Countdown timer
     STATE.countdownInterval = setInterval(() => {
         remaining--;
         if (countEl) countEl.textContent = remaining;
         if (remaining <= 0) {
             remaining = INTERVAL;
-            // Refresh current asset price silently
-            silentPriceRefresh();
+            if (STATE.marketOpen) silentPriceRefresh();
         }
     }, 1000);
 }
@@ -115,7 +155,7 @@ function startAutoRefresh() {
 async function silentPriceRefresh() {
     if (!STATE.apiOnline) return;
     try {
-        const res = await fetch(`${API_URL}/asset/${STATE.currentIsin}`, { signal: AbortSignal.timeout(8000) });
+        const res = await fetch(`${API_URL}/asset/${STATE.currentIsin}?period=${STATE.currentTimeframe}`, { signal: AbortSignal.timeout(8000) });
         if (!res.ok) return;
         const data = await res.json();
 
@@ -156,16 +196,16 @@ async function loadAssetDetail(isin) {
     let data;
     if (STATE.apiOnline) {
         try {
-            const res = await fetch(`${API_URL}/asset/${isin}`);
+            const res = await fetch(`${API_URL}/asset/${isin}?period=${STATE.currentTimeframe}`);
             if (!res.ok) throw new Error(`API ${res.status}`);
             data = await res.json();
-            // Merge name from screener list if missing
             if (!data.name || data.name === 'undefined') {
                 const known = STATE.allAssets.find(a => a.isin === isin);
                 if (known) data.name = known.name;
             }
         } catch (e) {
-            console.warn('Asset API error, using mock:', e);
+            console.warn('Asset API error:', e);
+            showToast(`Erreur chargement données: ${e.message}`, 'error');
             data = getMockDetail(isin);
         }
     } else {
@@ -179,6 +219,7 @@ async function loadAssetDetail(isin) {
     if (STATE.chartType !== 'line') switchChartType(STATE.chartType, data);
     updateAI(data);
     updateStats(data);
+    updateSubCharts(data);
     checkAlerts(data);
 }
 
@@ -259,6 +300,57 @@ function initCharts() {
                     tension: 0.4,
                     spanGaps: true,
                     order: 2
+                },
+                {   // Index 2: SMA 20
+                    label: 'SMA 20',
+                    data: [],
+                    borderColor: '#f59e0b',
+                    borderWidth: 1.2,
+                    pointRadius: 0,
+                    fill: false,
+                    tension: 0.3,
+                    hidden: true,
+                    spanGaps: true,
+                    order: 3
+                },
+                {   // Index 3: SMA 50
+                    label: 'SMA 50',
+                    data: [],
+                    borderColor: '#a855f7',
+                    borderWidth: 1.2,
+                    pointRadius: 0,
+                    fill: false,
+                    tension: 0.3,
+                    hidden: true,
+                    spanGaps: true,
+                    order: 4
+                },
+                {   // Index 4: Bollinger Upper
+                    label: 'BB Haut',
+                    data: [],
+                    borderColor: 'rgba(148,163,184,0.5)',
+                    borderWidth: 1,
+                    borderDash: [2, 2],
+                    pointRadius: 0,
+                    fill: false,
+                    tension: 0.3,
+                    hidden: true,
+                    spanGaps: true,
+                    order: 5
+                },
+                {   // Index 5: Bollinger Lower (fill between)
+                    label: 'BB Bas',
+                    data: [],
+                    borderColor: 'rgba(148,163,184,0.5)',
+                    borderWidth: 1,
+                    borderDash: [2, 2],
+                    pointRadius: 0,
+                    backgroundColor: 'rgba(148,163,184,0.08)',
+                    fill: '-1',
+                    tension: 0.3,
+                    hidden: true,
+                    spanGaps: true,
+                    order: 6
                 }
             ]
         },
@@ -322,7 +414,6 @@ function updateChart(data) {
     const chart = STATE.priceChart;
     const isPositive = data.change >= 0;
 
-    // Dynamic gradient color based on trend
     const ctx = document.getElementById('priceChart').getContext('2d');
     const grad = ctx.createLinearGradient(0, 0, 0, 260);
     if (isPositive) {
@@ -338,25 +429,32 @@ function updateChart(data) {
 
     chart.data.labels = data.labels;
     chart.data.datasets[0].data = data.dataseries;
-    // Replace VWAP 0s with null so Chart.js doesn't draw a line to 0
     const cleanVwap = data.vwapSeries ? data.vwapSeries.map(v => (v && v > 0) ? v : null) : [];
     chart.data.datasets[1].data = cleanVwap;
-    
-    // Show/hide VWAP based on toggle
-    const showVwap = document.getElementById('show-vwap').checked;
+
+    // Overlays: SMA20, SMA50, BB
+    const cleanArr = (arr) => arr ? arr.map(v => (v && v > 0) ? v : null) : [];
+    chart.data.datasets[2].data = cleanArr(data.sma20);
+    chart.data.datasets[3].data = cleanArr(data.sma50);
+    chart.data.datasets[4].data = cleanArr(data.bbUpper);
+    chart.data.datasets[5].data = cleanArr(data.bbLower);
+
+    const showVwap = document.getElementById('show-vwap')?.checked;
     chart.data.datasets[1].hidden = !showVwap;
 
-    // Auto-scale Y axis to data range with padding
-    const allPrices = [...data.dataseries, ...(showVwap ? cleanVwap : [])].filter(v => v != null && isFinite(v) && v > 0);
-    if (allPrices.length > 0) {
-        const minP = Math.min(...allPrices);
-        const maxP = Math.max(...allPrices);
-        const range = maxP - minP || maxP * 0.02;
-        const pad = range * 0.15;
+    // Auto-scale Y axis to visible data
+    const visiblePrices = [...data.dataseries];
+    if (showVwap) visiblePrices.push(...cleanVwap);
+    if (!chart.data.datasets[2].hidden && data.sma20) visiblePrices.push(...data.sma20);
+    if (!chart.data.datasets[4].hidden && data.bbUpper) visiblePrices.push(...data.bbUpper);
+    if (!chart.data.datasets[5].hidden && data.bbLower) visiblePrices.push(...data.bbLower);
+    const filtered = visiblePrices.filter(v => v != null && isFinite(v) && v > 0);
+    if (filtered.length > 0) {
+        const minP = Math.min(...filtered), maxP = Math.max(...filtered);
+        const range = maxP - minP || maxP * 0.02, pad = range * 0.15;
         chart.options.scales.y.min = Math.floor((minP - pad) * 100) / 100;
         chart.options.scales.y.max = Math.ceil((maxP + pad) * 100) / 100;
     }
-
     chart.update();
 
     // Update volume
@@ -379,6 +477,108 @@ function updateChart(data) {
     const lastVwap = data.vwapSeries?.[data.vwapSeries.length - 1];
     document.getElementById('stat-vwap').textContent = lastVwap ? lastVwap.toFixed(2) + ' €' : '--';
     document.getElementById('stat-vol').textContent = data.volumeSeries ? formatVolume(data.volumeSeries.reduce((a,b) => a+b, 0)) : '--';
+}
+
+/* =================== RSI / MACD SUB-CHARTS =================== */
+function initSubCharts() {
+    const rsiEl = document.getElementById('rsiChart');
+    const macdEl = document.getElementById('macdChart');
+    if (!rsiEl || !macdEl) return;
+
+    const commonOpts = {
+        responsive: true, maintainAspectRatio: false,
+        animation: { duration: 300 },
+        plugins: { legend: { display: false }, tooltip: {
+            mode: 'index', intersect: false,
+            backgroundColor: 'rgba(13,20,32,0.95)',
+            borderColor: 'rgba(99,102,241,0.3)', borderWidth: 1,
+            bodyFont: { family: "'JetBrains Mono'", size: 11 },
+            bodyColor: '#f1f5f9', titleColor: '#94a3b8',
+        }},
+        scales: {
+            x: { display: false },
+            y: { position: 'right', grid: { color: 'rgba(71,85,105,0.1)' },
+                 ticks: { font: { size: 9, family: "'JetBrains Mono'" }, color: '#475569' } }
+        },
+        interaction: { mode: 'nearest', axis: 'x', intersect: false }
+    };
+
+    STATE.rsiChart = new Chart(rsiEl.getContext('2d'), {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [{
+                label: 'RSI',
+                data: [],
+                borderColor: '#f59e0b',
+                borderWidth: 1.5,
+                pointRadius: 0,
+                fill: false,
+                tension: 0.3,
+                spanGaps: true
+            }]
+        },
+        options: {
+            ...commonOpts,
+            plugins: {
+                ...commonOpts.plugins,
+                annotation: {
+                    annotations: {
+                        overbought: { type: 'line', yMin: 70, yMax: 70, borderColor: 'rgba(239,68,68,0.4)', borderWidth: 1, borderDash: [3,3] },
+                        oversold: { type: 'line', yMin: 30, yMax: 30, borderColor: 'rgba(34,197,94,0.4)', borderWidth: 1, borderDash: [3,3] },
+                        mid: { type: 'line', yMin: 50, yMax: 50, borderColor: 'rgba(148,163,184,0.2)', borderWidth: 1, borderDash: [2,4] }
+                    }
+                },
+                tooltip: { ...commonOpts.plugins.tooltip, callbacks: { label: (ctx) => ` RSI: ${ctx.parsed.y?.toFixed(1)}` } }
+            },
+            scales: { ...commonOpts.scales, y: { ...commonOpts.scales.y, min: 0, max: 100 } }
+        }
+    });
+
+    STATE.macdChart = new Chart(macdEl.getContext('2d'), {
+        type: 'bar',
+        data: {
+            labels: [],
+            datasets: [
+                { label: 'Histogramme', data: [], backgroundColor: [], borderRadius: 1, order: 2 },
+                { label: 'MACD', type: 'line', data: [], borderColor: '#6366f1', borderWidth: 1.5, pointRadius: 0, fill: false, tension: 0.3, spanGaps: true, order: 1 },
+                { label: 'Signal', type: 'line', data: [], borderColor: '#ef4444', borderWidth: 1, borderDash: [3,3], pointRadius: 0, fill: false, tension: 0.3, spanGaps: true, order: 1 }
+            ]
+        },
+        options: {
+            ...commonOpts,
+            plugins: {
+                ...commonOpts.plugins,
+                annotation: { annotations: { zero: { type: 'line', yMin: 0, yMax: 0, borderColor: 'rgba(148,163,184,0.3)', borderWidth: 1 } } },
+                tooltip: { ...commonOpts.plugins.tooltip, callbacks: { label: (ctx) => ` ${ctx.dataset.label}: ${ctx.parsed.y?.toFixed(4)}` } }
+            }
+        }
+    });
+}
+
+function updateSubCharts(data) {
+    // RSI
+    if (STATE.rsiChart && data.rsiSeries) {
+        const rsiData = data.rsiSeries.map(v => (v != null && isFinite(v)) ? v : null);
+        STATE.rsiChart.data.labels = data.labels;
+        STATE.rsiChart.data.datasets[0].data = rsiData;
+        // Color based on last value
+        const lastRsi = rsiData.filter(v => v != null).pop() || 50;
+        STATE.rsiChart.data.datasets[0].borderColor = lastRsi > 70 ? '#ef4444' : lastRsi < 30 ? '#22c55e' : '#f59e0b';
+        STATE.rsiChart.update();
+    }
+    // MACD
+    if (STATE.macdChart && data.macdSeries) {
+        const macdHist = (data.macdHistSeries || []).map(v => (v != null && isFinite(v)) ? v : null);
+        const macdLine = (data.macdSeries || []).map(v => (v != null && isFinite(v)) ? v : null);
+        const macdSig = (data.macdSignalSeries || []).map(v => (v != null && isFinite(v)) ? v : null);
+        STATE.macdChart.data.labels = data.labels;
+        STATE.macdChart.data.datasets[0].data = macdHist;
+        STATE.macdChart.data.datasets[0].backgroundColor = macdHist.map(v => v >= 0 ? 'rgba(34,197,94,0.6)' : 'rgba(239,68,68,0.6)');
+        STATE.macdChart.data.datasets[1].data = macdLine;
+        STATE.macdChart.data.datasets[2].data = macdSig;
+        STATE.macdChart.update();
+    }
 }
 
 /* =================== CHART TYPE SWITCH =================== */
@@ -452,7 +652,11 @@ function switchChartType(type, data) {
             type: 'line',
             data: { labels: [], datasets: [
                 { label: 'Prix (€)', data: [], borderColor: '#6366f1', backgroundColor: grad, borderWidth: 2, pointRadius: 0, pointHoverRadius: 5, fill: true, tension: 0.3, order: 1 },
-                { label: 'VWAP', data: [], borderColor: '#0891b2', borderWidth: 1.5, borderDash: [5,3], pointRadius: 0, fill: false, tension: 0.3, spanGaps: true, order: 2 }
+                { label: 'VWAP', data: [], borderColor: '#0891b2', borderWidth: 1.5, borderDash: [5,3], pointRadius: 0, fill: false, tension: 0.3, spanGaps: true, order: 2 },
+                { label: 'SMA 20', data: [], borderColor: '#f59e0b', borderWidth: 1.2, pointRadius: 0, fill: false, tension: 0.3, hidden: true, spanGaps: true, order: 3 },
+                { label: 'SMA 50', data: [], borderColor: '#a855f7', borderWidth: 1.2, pointRadius: 0, fill: false, tension: 0.3, hidden: true, spanGaps: true, order: 4 },
+                { label: 'BB Haut', data: [], borderColor: 'rgba(148,163,184,0.5)', borderWidth: 1, borderDash: [2,2], pointRadius: 0, fill: false, tension: 0.3, hidden: true, spanGaps: true, order: 5 },
+                { label: 'BB Bas', data: [], borderColor: 'rgba(148,163,184,0.5)', borderWidth: 1, borderDash: [2,2], pointRadius: 0, backgroundColor: 'rgba(148,163,184,0.08)', fill: '-1', tension: 0.3, hidden: true, spanGaps: true, order: 6 }
             ]},
             options: STATE.priceChart?.options || {}
         });
@@ -503,8 +707,15 @@ function switchChartType(type, data) {
     chart.data.datasets[0].data = data.dataseries;
     const cleanVwap2 = data.vwapSeries ? data.vwapSeries.map(v => (v && v > 0) ? v : null) : [];
     chart.data.datasets[1].data = cleanVwap2;
-    const showVwap2 = document.getElementById('show-vwap').checked;
+    const showVwap2 = document.getElementById('show-vwap')?.checked;
     chart.data.datasets[1].hidden = !showVwap2;
+
+    // Set overlays
+    const cleanArr2 = (arr) => arr ? arr.map(v => (v && v > 0) ? v : null) : [];
+    if (chart.data.datasets[2]) chart.data.datasets[2].data = cleanArr2(data.sma20);
+    if (chart.data.datasets[3]) chart.data.datasets[3].data = cleanArr2(data.sma50);
+    if (chart.data.datasets[4]) chart.data.datasets[4].data = cleanArr2(data.bbUpper);
+    if (chart.data.datasets[5]) chart.data.datasets[5].data = cleanArr2(data.bbLower);
 
     // Auto-scale Y axis
     const prices2 = [...data.dataseries, ...(showVwap2 ? cleanVwap2 : [])].filter(v => v != null && isFinite(v) && v > 0);
@@ -923,6 +1134,28 @@ function setupControls() {
         }
     });
 
+    // SMA toggle
+    const smaToggle = document.getElementById('show-sma');
+    if (smaToggle) smaToggle.addEventListener('change', () => {
+        if (STATE.priceChart) {
+            const show = smaToggle.checked;
+            STATE.priceChart.data.datasets[2].hidden = !show; // SMA20
+            STATE.priceChart.data.datasets[3].hidden = !show; // SMA50
+            STATE.priceChart.update();
+        }
+    });
+
+    // Bollinger toggle
+    const bbToggle = document.getElementById('show-bb');
+    if (bbToggle) bbToggle.addEventListener('change', () => {
+        if (STATE.priceChart) {
+            const show = bbToggle.checked;
+            STATE.priceChart.data.datasets[4].hidden = !show; // BB Upper
+            STATE.priceChart.data.datasets[5].hidden = !show; // BB Lower
+            STATE.priceChart.update();
+        }
+    });
+
     // Chart Type buttons
     document.querySelectorAll('.ct-btn').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -933,11 +1166,14 @@ function setupControls() {
         });
     });
 
-    // Search
+    // Search (debounced)
     document.getElementById('search-input').addEventListener('input', (e) => {
-        const q = e.target.value.toLowerCase();
-        const filtered = STATE.allAssets.filter(a => a.isin.toLowerCase().includes(q) || (a.name||'').toLowerCase().includes(q));
-        renderScreener(filtered);
+        clearTimeout(STATE.searchTimeout);
+        STATE.searchTimeout = setTimeout(() => {
+            const q = e.target.value.toLowerCase();
+            const filtered = STATE.allAssets.filter(a => a.isin.toLowerCase().includes(q) || (a.name||'').toLowerCase().includes(q));
+            renderScreener(filtered);
+        }, 300);
     });
 
     // Filter chips

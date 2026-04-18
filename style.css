@@ -245,6 +245,43 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); font
 }
 #volumeChart { width: 100% !important; height: 100% !important; }
 
+/* Sub-charts (RSI, MACD) */
+.subchart-wrapper {
+    padding: 0 1rem;
+    height: 80px;
+    border-top: 1px solid var(--glass-border);
+    margin-top: 0.25rem;
+    position: relative;
+}
+.subchart-wrapper canvas { width: 100% !important; height: 100% !important; }
+.subchart-label {
+    position: absolute;
+    top: 4px;
+    left: 16px;
+    font-size: 0.65rem;
+    font-weight: 600;
+    color: var(--text-2);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    z-index: 2;
+}
+
+/* Market Badge */
+.market-badge {
+    font-size: 0.6rem;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+}
+.market-badge.open { background: var(--green-dim); color: var(--green); }
+.market-badge.closed { background: var(--red-dim); color: var(--red); }
+
+/* Overlay toggle extra */
+.toggle-label.sma { color: #f59e0b; }
+.toggle-label.bb { color: #94a3b8; }
+
 .crosshair-tooltip {
     position: absolute;
     background: var(--bg-2);
