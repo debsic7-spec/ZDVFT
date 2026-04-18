@@ -257,6 +257,7 @@ function initCharts() {
                     pointRadius: 0,
                     fill: false,
                     tension: 0.4,
+                    spanGaps: true,
                     order: 2
                 }
             ]
@@ -337,14 +338,16 @@ function updateChart(data) {
 
     chart.data.labels = data.labels;
     chart.data.datasets[0].data = data.dataseries;
-    chart.data.datasets[1].data = data.vwapSeries;
+    // Replace VWAP 0s with null so Chart.js doesn't draw a line to 0
+    const cleanVwap = data.vwapSeries ? data.vwapSeries.map(v => (v && v > 0) ? v : null) : [];
+    chart.data.datasets[1].data = cleanVwap;
     
     // Show/hide VWAP based on toggle
     const showVwap = document.getElementById('show-vwap').checked;
     chart.data.datasets[1].hidden = !showVwap;
 
     // Auto-scale Y axis to data range with padding
-    const allPrices = [...data.dataseries, ...(showVwap && data.vwapSeries ? data.vwapSeries : [])].filter(v => v != null && isFinite(v));
+    const allPrices = [...data.dataseries, ...(showVwap ? cleanVwap : [])].filter(v => v != null && isFinite(v) && v > 0);
     if (allPrices.length > 0) {
         const minP = Math.min(...allPrices);
         const maxP = Math.max(...allPrices);
@@ -449,7 +452,7 @@ function switchChartType(type, data) {
             type: 'line',
             data: { labels: [], datasets: [
                 { label: 'Prix (€)', data: [], borderColor: '#6366f1', backgroundColor: grad, borderWidth: 2, pointRadius: 0, pointHoverRadius: 5, fill: true, tension: 0.3, order: 1 },
-                { label: 'VWAP', data: [], borderColor: '#0891b2', borderWidth: 1.5, borderDash: [5,3], pointRadius: 0, fill: false, tension: 0.3, order: 2 }
+                { label: 'VWAP', data: [], borderColor: '#0891b2', borderWidth: 1.5, borderDash: [5,3], pointRadius: 0, fill: false, tension: 0.3, spanGaps: true, order: 2 }
             ]},
             options: STATE.priceChart?.options || {}
         });
@@ -498,12 +501,13 @@ function switchChartType(type, data) {
 
     chart.data.labels = data.labels;
     chart.data.datasets[0].data = data.dataseries;
-    chart.data.datasets[1].data = data.vwapSeries;
+    const cleanVwap2 = data.vwapSeries ? data.vwapSeries.map(v => (v && v > 0) ? v : null) : [];
+    chart.data.datasets[1].data = cleanVwap2;
     const showVwap2 = document.getElementById('show-vwap').checked;
     chart.data.datasets[1].hidden = !showVwap2;
 
     // Auto-scale Y axis
-    const prices2 = [...data.dataseries, ...(showVwap2 && data.vwapSeries ? data.vwapSeries : [])].filter(v => v != null && isFinite(v));
+    const prices2 = [...data.dataseries, ...(showVwap2 ? cleanVwap2 : [])].filter(v => v != null && isFinite(v) && v > 0);
     if (prices2.length > 0) {
         const mn = Math.min(...prices2), mx = Math.max(...prices2);
         const rng = mx - mn || mx * 0.02, pad = rng * 0.15;
