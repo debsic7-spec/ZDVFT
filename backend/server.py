@@ -119,16 +119,35 @@ def get_asset_data(isin: str):
     
     try:
         df_intra = stock.history(period="5d", interval="5m")
+        # Flatten MultiIndex columns if present
+        if isinstance(df_intra.columns, pd.MultiIndex):
+            df_intra.columns = df_intra.columns.get_level_values(0)
         if not df_intra.empty:
             last_day = df_intra.index[-1].date()
             df_intra = df_intra[df_intra.index.date == last_day].copy()
-    except Exception:
+    except Exception as e:
+        print(f"Intraday 5m error for {ticker}: {e}")
         df_intra = pd.DataFrame()
+
+    # Fallback to 15m if 5m is empty
+    if df_intra.empty or len(df_intra) < 2:
+        try:
+            df_intra = stock.history(period="5d", interval="15m")
+            if isinstance(df_intra.columns, pd.MultiIndex):
+                df_intra.columns = df_intra.columns.get_level_values(0)
+            if not df_intra.empty:
+                last_day = df_intra.index[-1].date()
+                df_intra = df_intra[df_intra.index.date == last_day].copy()
+        except Exception as e:
+            print(f"Intraday 15m error for {ticker}: {e}")
+            df_intra = pd.DataFrame()
 
     if df_intra.empty or len(df_intra) < 2:
         # Fallback: use last 30 daily candles
         use_daily = True
         df_intra = stock.history(period="30d", interval="1d")
+        if isinstance(df_intra.columns, pd.MultiIndex):
+            df_intra.columns = df_intra.columns.get_level_values(0)
         if df_intra.empty:
             raise HTTPException(status_code=400, detail="No data available for this asset")
 
@@ -145,6 +164,8 @@ def get_asset_data(isin: str):
 
     # --- Use official daily close as reference price ---
     df_daily = stock.history(period="10d", interval="1d")
+    if isinstance(df_daily.columns, pd.MultiIndex):
+        df_daily.columns = df_daily.columns.get_level_values(0)
     if not df_daily.empty:
         official_close = float(df_daily['Close'].iloc[-1])
         current_price = official_close
@@ -159,6 +180,8 @@ def get_asset_data(isin: str):
     # --- 52w ---
     try:
         df_52w = stock.history(period="1y", interval="1d")
+        if isinstance(df_52w.columns, pd.MultiIndex):
+            df_52w.columns = df_52w.columns.get_level_values(0)
         high52 = round(float(df_52w['High'].max()), 2) if not df_52w.empty else None
         low52 = round(float(df_52w['Low'].min()), 2) if not df_52w.empty else None
     except Exception:
@@ -167,6 +190,8 @@ def get_asset_data(isin: str):
     # --- Long history for indicators ---
     try:
         df_long = stock.history(period="6mo", interval="1d")
+        if isinstance(df_long.columns, pd.MultiIndex):
+            df_long.columns = df_long.columns.get_level_values(0)
     except Exception:
         df_long = df_daily
 
@@ -455,6 +480,43 @@ async def run_bg_task():
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(run_bg_task())
+
+# ================= DEBUG ENDPOINT ================= #
+@app.get("/api/debug/{isin}")
+def debug_asset(isin: str):
+    """Debug endpoint to diagnose data issues."""
+    if isin not in ASSET_MAPPING:
+        return {"error": "Unknown ISIN"}
+    name, ticker = ASSET_MAPPING[isin]
+    stock = yf.Ticker(ticker)
+    result = {"ticker": ticker, "name": name}
+    try:
+        df5 = stock.history(period="5d", interval="5m")
+        result["intra_5m_shape"] = str(df5.shape)
+        result["intra_5m_cols"] = str(list(df5.columns))
+        result["intra_5m_multiindex"] = isinstance(df5.columns, pd.MultiIndex)
+        if not df5.empty:
+            result["intra_5m_last_date"] = str(df5.index[-1])
+            result["intra_5m_first_date"] = str(df5.index[0])
+    except Exception as e:
+        result["intra_5m_error"] = str(e)
+    try:
+        df15 = stock.history(period="5d", interval="15m")
+        result["intra_15m_shape"] = str(df15.shape)
+        result["intra_15m_multiindex"] = isinstance(df15.columns, pd.MultiIndex)
+    except Exception as e:
+        result["intra_15m_error"] = str(e)
+    try:
+        dfd = stock.history(period="10d", interval="1d")
+        result["daily_shape"] = str(dfd.shape)
+        result["daily_multiindex"] = isinstance(dfd.columns, pd.MultiIndex)
+        if not dfd.empty:
+            if isinstance(dfd.columns, pd.MultiIndex):
+                dfd.columns = dfd.columns.get_level_values(0)
+            result["daily_last_close"] = float(dfd['Close'].iloc[-1])
+    except Exception as e:
+        result["daily_error"] = str(e)
+    return result
 
 # ================= STATIC FILES (FRONTEND) ================= #
 # Serve frontend files from parent directory
