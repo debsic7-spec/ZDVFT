@@ -54,12 +54,12 @@ def compute_ai_signals(df_intraday: pd.DataFrame, df_long: pd.DataFrame, current
 
     # RSI
     rsi_series = ta.momentum.RSIIndicator(close=df_long['Close'], window=14).rsi()
-    rsi = float(rsi_series.iloc[-1]) if not rsi_series.empty else 50.0
+    rsi = float(rsi_series.iloc[-1]) if not rsi_series.empty and pd.notna(rsi_series.iloc[-1]) else 50.0
     
     # MACD
     macd_ind = ta.trend.MACD(close=df_long['Close'])
-    macd_val = float(macd_ind.macd().iloc[-1])
-    macd_sig = float(macd_ind.macd_signal().iloc[-1])
+    macd_val = float(macd_ind.macd().iloc[-1]) if pd.notna(macd_ind.macd().iloc[-1]) else 0.0
+    macd_sig = float(macd_ind.macd_signal().iloc[-1]) if pd.notna(macd_ind.macd_signal().iloc[-1]) else 0.0
     macd_hist = macd_val - macd_sig   # Positive = bullish cross
     
     # VWAP signal
@@ -178,6 +178,15 @@ def _get_asset_data_impl(isin: str):
     day_high = round(float(df_intra['High'].max()), 2)
     day_low = round(float(df_intra['Low'].min()), 2)
 
+    # Helper to clean NaN/Inf for JSON serialization
+    import math
+    def clean(v):
+        f = float(v)
+        return round(f, 2) if math.isfinite(f) else 0.0
+    def clean_int(v):
+        f = float(v)
+        return int(f) if math.isfinite(f) else 0
+
     return {
         "isin": isin,
         "name": name,
@@ -186,12 +195,12 @@ def _get_asset_data_impl(isin: str):
         "change": change_pct,
         "trend": "up" if change_pct >= 0 else "down",
         "labels": labels,
-        "dataseries": [round(float(v), 2) for v in df_intra['Close']],
-        "highSeries": [round(float(v), 2) for v in df_intra['High']],
-        "lowSeries": [round(float(v), 2) for v in df_intra['Low']],
-        "openSeries": [round(float(v), 2) for v in df_intra['Open']],
-        "vwapSeries": [round(float(v), 2) for v in df_intra['VWAP']],
-        "volumeSeries": [int(v) for v in df_intra.get('Volume', pd.Series([0]*len(df_intra))).fillna(0)],
+        "dataseries": [clean(v) for v in df_intra['Close']],
+        "highSeries": [clean(v) for v in df_intra['High']],
+        "lowSeries": [clean(v) for v in df_intra['Low']],
+        "openSeries": [clean(v) for v in df_intra['Open']],
+        "vwapSeries": [clean(v) for v in df_intra['VWAP']],
+        "volumeSeries": [clean_int(v) for v in df_intra.get('Volume', pd.Series([0]*len(df_intra))).fillna(0)],
         "dayOpen": day_open,
         "dayHigh": day_high,
         "dayLow": day_low,
