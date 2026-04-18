@@ -289,6 +289,7 @@ function initCharts() {
                 y: {
                     display: true,
                     position: 'right',
+                    beginAtZero: false,
                     grid: { color: 'rgba(71,85,105,0.15)', drawBorder: false },
                     ticks: { font: { size: 10, family: "'JetBrains Mono', monospace" }, color: '#475569', callback: (v) => v.toFixed(2) }
                 }
@@ -342,6 +343,17 @@ function updateChart(data) {
     const showVwap = document.getElementById('show-vwap').checked;
     chart.data.datasets[1].hidden = !showVwap;
 
+    // Auto-scale Y axis to data range with padding
+    const allPrices = [...data.dataseries, ...(showVwap && data.vwapSeries ? data.vwapSeries : [])].filter(v => v != null && isFinite(v));
+    if (allPrices.length > 0) {
+        const minP = Math.min(...allPrices);
+        const maxP = Math.max(...allPrices);
+        const range = maxP - minP || maxP * 0.02;
+        const pad = range * 0.15;
+        chart.options.scales.y.min = Math.floor((minP - pad) * 100) / 100;
+        chart.options.scales.y.max = Math.ceil((maxP + pad) * 100) / 100;
+    }
+
     chart.update();
 
     // Update volume
@@ -389,6 +401,16 @@ function switchChartType(type, data) {
                   return { x: i, o: prev, h: Math.max(c, prev) + noise, l: Math.min(c, prev) - noise, c };
               });
 
+        // Compute Y range from OHLC
+        const allOhlcPrices = ohlcData.flatMap(d => [d.o, d.h, d.l, d.c]).filter(v => v != null && isFinite(v));
+        let candleYMin, candleYMax;
+        if (allOhlcPrices.length > 0) {
+            const mn = Math.min(...allOhlcPrices), mx = Math.max(...allOhlcPrices);
+            const rng = mx - mn || mx * 0.02, pad = rng * 0.15;
+            candleYMin = Math.floor((mn - pad) * 100) / 100;
+            candleYMax = Math.ceil((mx + pad) * 100) / 100;
+        }
+
         STATE.priceChart = new Chart(ctx, {
             type: 'candlestick',
             data: {
@@ -410,7 +432,7 @@ function switchChartType(type, data) {
                 }},
                 scales: {
                     x: { ticks: { font: { size: 10 }, maxTicksLimit: 8, color: '#475569' }, grid: { color: 'rgba(71,85,105,0.15)' } },
-                    y: { position: 'right', ticks: { font: { size: 10, family: "'JetBrains Mono'" }, color: '#475569', callback: (v) => v.toFixed(2) }, grid: { color: 'rgba(71,85,105,0.15)' } }
+                    y: { position: 'right', beginAtZero: false, min: candleYMin, max: candleYMax, ticks: { font: { size: 10, family: "'JetBrains Mono'" }, color: '#475569', callback: (v) => v.toFixed(2) }, grid: { color: 'rgba(71,85,105,0.15)' } }
                 }
             }
         });
@@ -477,7 +499,18 @@ function switchChartType(type, data) {
     chart.data.labels = data.labels;
     chart.data.datasets[0].data = data.dataseries;
     chart.data.datasets[1].data = data.vwapSeries;
-    chart.data.datasets[1].hidden = !document.getElementById('show-vwap').checked;
+    const showVwap2 = document.getElementById('show-vwap').checked;
+    chart.data.datasets[1].hidden = !showVwap2;
+
+    // Auto-scale Y axis
+    const prices2 = [...data.dataseries, ...(showVwap2 && data.vwapSeries ? data.vwapSeries : [])].filter(v => v != null && isFinite(v));
+    if (prices2.length > 0) {
+        const mn = Math.min(...prices2), mx = Math.max(...prices2);
+        const rng = mx - mn || mx * 0.02, pad = rng * 0.15;
+        chart.options.scales.y.min = Math.floor((mn - pad) * 100) / 100;
+        chart.options.scales.y.max = Math.ceil((mx + pad) * 100) / 100;
+    }
+
     chart.update();
 }
 
