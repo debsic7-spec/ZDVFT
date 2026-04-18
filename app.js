@@ -1,0 +1,1051 @@
+/* ===== PEA TRACKER AI - APP.JS ===== */
+
+const savedBackendUrl = localStorage.getItem('pea_backend_url') || '';
+const API_URL = savedBackendUrl
+    ? (savedBackendUrl.startsWith('http') ? `${savedBackendUrl}/api` : `http://${savedBackendUrl}:8000/api`)
+    : `${window.location.origin}/api`;
+const STATE = {
+    currentIsin: 'FR0013341781',
+    favorites: JSON.parse(localStorage.getItem('pea_favorites')) || ['FR0013341781'],
+    alerts: JSON.parse(localStorage.getItem('pea_alerts')) || [],
+    portfolio: JSON.parse(localStorage.getItem('pea_portfolio')) || {},
+    allAssets: [],
+    priceChart: null,
+    volumeChart: null,
+    currentTimeframe: '1d',
+    chartType: 'line',
+    currentData: null,
+    apiOnline: false,
+    refreshInterval: null,
+    countdownInterval: null,
+    lastPrice: null
+};
+
+/* =================== INIT =================== */
+document.addEventListener('DOMContentLoaded', async () => {
+    setupNavigation();
+    initCharts();
+    setupControls();
+    setupPortfolio();
+    await bootApp();
+    startAutoRefresh();
+    // Force clear old service workers and caches on load
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(regs => {
+            regs.forEach(r => r.unregister());
+        });
+        caches.keys().then(keys => {
+            keys.forEach(k => {
+                if (k !== 'pea-tracker-v3') caches.delete(k);
+            });
+        });
+    }
+});
+
+/* =================== NAVIGATION =================== */
+function setupNavigation() {
+    // Sidebar + Mobile Nav sync
+    const allNavBtns = document.querySelectorAll('.nav-item, .m-nav');
+    allNavBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const tab = btn.getAttribute('data-tab');
+            switchTab(tab);
+        });
+    });
+}
+
+function switchTab(tabId) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.nav-item, .m-nav').forEach(b => {
+        b.classList.toggle('active', b.getAttribute('data-tab') === tabId);
+    });
+    document.getElementById(`tab-${tabId}`).classList.add('active');
+
+    if (tabId === 'search') renderScreener(STATE.allAssets);
+    if (tabId === 'favorites') renderFavorites();
+    if (tabId === 'alerts') { renderAlerts(); populateAlertSelect(); }
+    if (tabId === 'opportunities') fetchOpportunities();
+    if (tabId === 'settings') loadSettings();
+}
+
+/* =================== BOOT =================== */
+async function bootApp() {
+    try {
+        const res = await fetch(`${API_URL}/scan`, { signal: AbortSignal.timeout(5000) });
+        if (!res.ok) throw new Error('API Error');
+        STATE.allAssets = await res.json();
+        STATE.apiOnline = true;
+        setApiStatus(true);
+    } catch (e) {
+        console.warn('API Backend Offline. Mode démo activé.', e);
+        STATE.allAssets = getMockAssets();
+        STATE.apiOnline = false;
+        setApiStatus(false);
+    }
+
+    // Initial load
+    await loadAssetDetail(STATE.currentIsin);
+
+    // Load opportunities in background
+    fetchOpportunities();
+
+    // Auto-refresh opportunities every 5 minutes
+    setInterval(fetchOpportunities, 5 * 60 * 1000);
+}
+
+/* =================== AUTO-REFRESH =================== */
+function startAutoRefresh() {
+    const INTERVAL = 30; // seconds
+    let remaining = INTERVAL;
+
+    const countEl = document.getElementById('countdown-sec');
+
+    // Countdown timer
+    STATE.countdownInterval = setInterval(() => {
+        remaining--;
+        if (countEl) countEl.textContent = remaining;
+        if (remaining <= 0) {
+            remaining = INTERVAL;
+            // Refresh current asset price silently
+            silentPriceRefresh();
+        }
+    }, 1000);
+}
+
+async function silentPriceRefresh() {
+    if (!STATE.apiOnline) return;
+    try {
+        const res = await fetch(`${API_URL}/asset/${STATE.currentIsin}`, { signal: AbortSignal.timeout(8000) });
+        if (!res.ok) return;
+        const data = await res.json();
+
+        // Pulse animation if price changed
+        const priceEl = document.getElementById('current-price');
+        if (STATE.lastPrice !== null && data.price !== STATE.lastPrice) {
+            priceEl.classList.remove('price-updated');
+            void priceEl.offsetWidth; // reflow
+            priceEl.classList.add('price-updated');
+        }
+        STATE.lastPrice = data.price;
+
+        // Update header prices only (don't redraw chart)
+        document.getElementById('current-price').textContent = `${data.price.toFixed(2)} €`;
+        const changeBadge = document.getElementById('current-change');
+        const sign = data.change >= 0 ? '+' : '';
+        changeBadge.textContent = `${sign}${data.change.toFixed(2)}%`;
+        changeBadge.className = `change-badge ${data.change >= 0 ? 'positive' : 'negative'}`;
+
+        // Update portfolio P&L
+        updatePortfolioDisplay(data.price);
+
+        // Check alerts
+        checkAlerts(data);
+    } catch (e) { /* silent */ }
+}
+
+function setApiStatus(online) {
+    const dot = document.getElementById('api-status-dot');
+    dot.querySelector('.status-dot').className = `status-dot ${online ? 'online' : 'offline'}`;
+    dot.querySelector('span').textContent = online ? 'API Live' : 'Mode Démo';
+}
+
+/* =================== ASSET DETAIL =================== */
+async function loadAssetDetail(isin) {
+    STATE.currentIsin = isin;
+
+    let data;
+    if (STATE.apiOnline) {
+        try {
+            const res = await fetch(`${API_URL}/asset/${isin}`);
+            if (!res.ok) throw new Error(`API ${res.status}`);
+            data = await res.json();
+            // Merge name from screener list if missing
+            if (!data.name || data.name === 'undefined') {
+                const known = STATE.allAssets.find(a => a.isin === isin);
+                if (known) data.name = known.name;
+            }
+        } catch (e) {
+            console.warn('Asset API error, using mock:', e);
+            data = getMockDetail(isin);
+        }
+    } else {
+        data = getMockDetail(isin);
+    }
+
+    STATE.currentData = data;
+    updateHeader(data);
+    updateChart(data);
+    // Re-apply current chart type after data update
+    if (STATE.chartType !== 'line') switchChartType(STATE.chartType, data);
+    updateAI(data);
+    updateStats(data);
+    checkAlerts(data);
+}
+
+function updateHeader(data) {
+    document.getElementById('asset-name').textContent = data.name;
+    document.getElementById('asset-isin').textContent = `${data.isin} · ${data.ticker || ''}`;
+
+    const priceEl = document.getElementById('current-price');
+    if (STATE.lastPrice !== null && data.price !== STATE.lastPrice) {
+        priceEl.classList.remove('price-updated');
+        void priceEl.offsetWidth;
+        priceEl.classList.add('price-updated');
+    }
+    STATE.lastPrice = data.price;
+    priceEl.textContent = `${data.price.toFixed(2)} €`;
+    
+    const changeBadge = document.getElementById('current-change');
+    const sign = data.change >= 0 ? '+' : '';
+    changeBadge.textContent = `${sign}${data.change.toFixed(2)}%`;
+    changeBadge.className = `change-badge ${data.change >= 0 ? 'positive' : 'negative'}`;
+
+    // Fav button
+    const favBtn = document.getElementById('fav-toggle-btn');
+    const isFav = STATE.favorites.includes(data.isin);
+    favBtn.className = isFav ? 'fav-active' : '';
+    favBtn.onclick = () => {
+        toggleFavorite(data.isin);
+        const nowFav = STATE.favorites.includes(data.isin);
+        favBtn.className = nowFav ? 'fav-active' : '';
+    };
+
+    // Portfolio P&L
+    updatePortfolioDisplay(data.price);
+
+    // Notification btn
+    document.getElementById('noti-btn').onclick = () => requestNotification(data);
+}
+
+
+/* =================== CHARTS =================== */
+function initCharts() {
+    const priceCtx = document.getElementById('priceChart').getContext('2d');
+    const volCtx = document.getElementById('volumeChart').getContext('2d');
+
+    const priceGrad = priceCtx.createLinearGradient(0, 0, 0, 260);
+    priceGrad.addColorStop(0, 'rgba(99, 102, 241, 0.3)');
+    priceGrad.addColorStop(1, 'rgba(99, 102, 241, 0)');
+
+    Chart.defaults.color = '#94a3b8';
+    Chart.defaults.font.family = "'Inter', sans-serif";
+
+    STATE.priceChart = new Chart(priceCtx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [
+                {
+                    label: 'Prix (€)',
+                    data: [],
+                    borderColor: '#6366f1',
+                    backgroundColor: priceGrad,
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    pointHoverRadius: 5,
+                    pointHoverBackgroundColor: '#6366f1',
+                    fill: true,
+                    tension: 0.3,
+                    order: 1
+                },
+                {
+                    label: 'VWAP',
+                    data: [],
+                    borderColor: '#0891b2',
+                    borderWidth: 1.5,
+                    borderDash: [4, 4],
+                    pointRadius: 0,
+                    fill: false,
+                    tension: 0.4,
+                    order: 2
+                }
+            ]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            animation: { duration: 500 },
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    mode: 'index', intersect: false,
+                    backgroundColor: 'rgba(13, 20, 32, 0.95)',
+                    borderColor: 'rgba(99,102,241,0.3)',
+                    borderWidth: 1,
+                    titleColor: '#94a3b8',
+                    bodyColor: '#f1f5f9',
+                    titleFont: { family: "'JetBrains Mono', monospace", size: 11 },
+                    bodyFont: { family: "'JetBrains Mono', monospace", size: 12 },
+                    callbacks: {
+                        label: (ctx) => ` ${ctx.dataset.label}: ${ctx.parsed.y?.toFixed(2)} €`
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    display: true,
+                    grid: { color: 'rgba(71,85,105,0.15)', drawBorder: false },
+                    ticks: { font: { size: 10, family: "'Inter', sans-serif" }, maxTicksLimit: 8, color: '#475569' }
+                },
+                y: {
+                    display: true,
+                    position: 'right',
+                    grid: { color: 'rgba(71,85,105,0.15)', drawBorder: false },
+                    ticks: { font: { size: 10, family: "'JetBrains Mono', monospace" }, color: '#475569', callback: (v) => v.toFixed(2) }
+                }
+            },
+            interaction: { mode: 'nearest', axis: 'x', intersect: false }
+        }
+    });
+
+    STATE.volumeChart = new Chart(volCtx, {
+        type: 'bar',
+        data: { labels: [], datasets: [{ label: 'Volume', data: [], backgroundColor: [], borderRadius: 2 }] },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            animation: { duration: 500 },
+            plugins: { legend: { display: false }, tooltip: {
+                backgroundColor: 'rgba(13,20,32,0.95)',
+                borderColor: 'rgba(99,102,241,0.3)', borderWidth: 1,
+                callbacks: { label: (ctx) => ` Vol: ${formatVolume(ctx.parsed.y)}` }
+            }},
+            scales: {
+                x: { display: false },
+                y: { display: false }
+            }
+        }
+    });
+}
+
+function updateChart(data) {
+    const chart = STATE.priceChart;
+    const isPositive = data.change >= 0;
+
+    // Dynamic gradient color based on trend
+    const ctx = document.getElementById('priceChart').getContext('2d');
+    const grad = ctx.createLinearGradient(0, 0, 0, 260);
+    if (isPositive) {
+        grad.addColorStop(0, 'rgba(34, 197, 94, 0.3)');
+        grad.addColorStop(1, 'rgba(34, 197, 94, 0)');
+        chart.data.datasets[0].borderColor = '#22c55e';
+    } else {
+        grad.addColorStop(0, 'rgba(239, 68, 68, 0.3)');
+        grad.addColorStop(1, 'rgba(239, 68, 68, 0)');
+        chart.data.datasets[0].borderColor = '#ef4444';
+    }
+    chart.data.datasets[0].backgroundColor = grad;
+
+    chart.data.labels = data.labels;
+    chart.data.datasets[0].data = data.dataseries;
+    chart.data.datasets[1].data = data.vwapSeries;
+    
+    // Show/hide VWAP based on toggle
+    const showVwap = document.getElementById('show-vwap').checked;
+    chart.data.datasets[1].hidden = !showVwap;
+
+    chart.update();
+
+    // Update volume
+    if (data.volumeSeries) {
+        const volColors = data.volumeSeries.map((_, i) => {
+            if (i === 0) return 'rgba(99,102,241,0.5)';
+            return data.dataseries[i] >= data.dataseries[i-1] ? 'rgba(34,197,94,0.5)' : 'rgba(239,68,68,0.5)';
+        });
+        STATE.volumeChart.data.labels = data.labels;
+        STATE.volumeChart.data.datasets[0].data = data.volumeSeries;
+        STATE.volumeChart.data.datasets[0].backgroundColor = volColors;
+        STATE.volumeChart.update();
+    }
+
+    // Stats row
+    const pr = data.dataseries;
+    document.getElementById('stat-open').textContent = pr[0]?.toFixed(2) + ' €' || '--';
+    document.getElementById('stat-high').textContent = Math.max(...pr).toFixed(2) + ' €';
+    document.getElementById('stat-low').textContent = Math.min(...pr).toFixed(2) + ' €';
+    const lastVwap = data.vwapSeries?.[data.vwapSeries.length - 1];
+    document.getElementById('stat-vwap').textContent = lastVwap ? lastVwap.toFixed(2) + ' €' : '--';
+    document.getElementById('stat-vol').textContent = data.volumeSeries ? formatVolume(data.volumeSeries.reduce((a,b) => a+b, 0)) : '--';
+}
+
+/* =================== CHART TYPE SWITCH =================== */
+function switchChartType(type, data) {
+    STATE.chartType = type;
+    if (!data) data = STATE.currentData;
+    if (!data) return;
+
+    const ctx = document.getElementById('priceChart').getContext('2d');
+    const isPositive = data.change >= 0;
+
+    if (type === 'candle') {
+        // Rebuild chart as candlestick
+        STATE.priceChart.destroy();
+        const ohlcData = (data.ohlc && data.ohlc.length > 0)
+            ? data.ohlc.map((d, i) => ({ x: i, o: d.o, h: d.h, l: d.l, c: d.c }))
+            : data.dataseries.map((c, i) => {
+                  // Simulate OHLC from close only (fallback)
+                  const prev = i > 0 ? data.dataseries[i - 1] : c;
+                  const noise = c * 0.003;
+                  return { x: i, o: prev, h: Math.max(c, prev) + noise, l: Math.min(c, prev) - noise, c };
+              });
+
+        STATE.priceChart = new Chart(ctx, {
+            type: 'candlestick',
+            data: {
+                labels: data.labels,
+                datasets: [{
+                    label: 'OHLC',
+                    data: ohlcData,
+                    color: { up: '#22c55e', down: '#ef4444', unchanged: '#94a3b8' }
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                animation: { duration: 400 },
+                plugins: { legend: { display: false }, tooltip: {
+                    backgroundColor: 'rgba(13,20,32,0.95)',
+                    borderColor: 'rgba(99,102,241,0.3)', borderWidth: 1,
+                    bodyColor: '#f1f5f9',
+                    callbacks: { label: (ctx) => ` O:${ctx.parsed.o?.toFixed(2)} H:${ctx.parsed.h?.toFixed(2)} L:${ctx.parsed.l?.toFixed(2)} C:${ctx.parsed.c?.toFixed(2)}` }
+                }},
+                scales: {
+                    x: { ticks: { font: { size: 10 }, maxTicksLimit: 8, color: '#475569' }, grid: { color: 'rgba(71,85,105,0.15)' } },
+                    y: { position: 'right', ticks: { font: { size: 10, family: "'JetBrains Mono'" }, color: '#475569', callback: (v) => v.toFixed(2) }, grid: { color: 'rgba(71,85,105,0.15)' } }
+                }
+            }
+        });
+        return;
+    }
+
+    // Restore line chart if was candlestick
+    if (STATE.priceChart.config.type === 'candlestick') {
+        STATE.priceChart.destroy();
+        const grad = ctx.createLinearGradient(0, 0, 0, 260);
+        grad.addColorStop(0, 'rgba(99,102,241,0.3)');
+        grad.addColorStop(1, 'rgba(99,102,241,0)');
+        STATE.priceChart = new Chart(ctx, {
+            type: 'line',
+            data: { labels: [], datasets: [
+                { label: 'Prix (€)', data: [], borderColor: '#6366f1', backgroundColor: grad, borderWidth: 2, pointRadius: 0, pointHoverRadius: 5, fill: true, tension: 0.3, order: 1 },
+                { label: 'VWAP', data: [], borderColor: '#0891b2', borderWidth: 1.5, borderDash: [5,3], pointRadius: 0, fill: false, tension: 0.3, order: 2 }
+            ]},
+            options: STATE.priceChart?.options || {}
+        });
+    }
+
+    const chart = STATE.priceChart;
+    const grad = ctx.createLinearGradient(0, 0, 0, 260);
+
+    if (type === 'area') {
+        const fillColor = isPositive ? [0.4, '#22c55e'] : [0.4, '#ef4444'];
+        grad.addColorStop(0, `rgba(${isPositive ? '34,197,94' : '239,68,68'}, 0.45)`);
+        grad.addColorStop(0.6, `rgba(${isPositive ? '34,197,94' : '239,68,68'}, 0.1)`);
+        grad.addColorStop(1, `rgba(${isPositive ? '34,197,94' : '239,68,68'}, 0)`);
+        chart.data.datasets[0].fill = true;
+        chart.data.datasets[0].backgroundColor = grad;
+        chart.data.datasets[0].borderColor = isPositive ? '#22c55e' : '#ef4444';
+        chart.data.datasets[0].borderWidth = 2;
+        chart.data.datasets[0].tension = 0.4;
+
+    } else if (type === 'bar') {
+        chart.data.datasets[0].type = 'bar';
+        const barColors = data.dataseries.map((v, i) => {
+            if (i === 0) return 'rgba(99,102,241,0.7)';
+            return data.dataseries[i] >= data.dataseries[i-1] ? 'rgba(34,197,94,0.7)' : 'rgba(239,68,68,0.7)';
+        });
+        chart.data.datasets[0].backgroundColor = barColors;
+        chart.data.datasets[0].borderColor = 'transparent';
+        chart.data.datasets[0].fill = false;
+        chart.data.datasets[0].tension = 0;
+
+    } else { // line (default)
+        chart.data.datasets[0].type = 'line';
+        if (isPositive) {
+            grad.addColorStop(0, 'rgba(34,197,94,0.3)');
+            grad.addColorStop(1, 'rgba(34,197,94,0)');
+            chart.data.datasets[0].borderColor = '#22c55e';
+        } else {
+            grad.addColorStop(0, 'rgba(239,68,68,0.3)');
+            grad.addColorStop(1, 'rgba(239,68,68,0)');
+            chart.data.datasets[0].borderColor = '#ef4444';
+        }
+        chart.data.datasets[0].backgroundColor = grad;
+        chart.data.datasets[0].fill = true;
+        chart.data.datasets[0].tension = 0.3;
+    }
+
+    chart.data.labels = data.labels;
+    chart.data.datasets[0].data = data.dataseries;
+    chart.data.datasets[1].data = data.vwapSeries;
+    chart.data.datasets[1].hidden = !document.getElementById('show-vwap').checked;
+    chart.update();
+}
+
+
+function updateAI(data) {
+    const verdictEl = document.getElementById('verdict-text');
+    const detailEl = document.getElementById('verdict-detail');
+    const confEl = document.getElementById('ai-confidence');
+
+    verdictEl.textContent = data.ai_status || 'GARDER';
+    detailEl.textContent = data.ai_details || 'Données insuffisantes.';
+
+    if (data.ai_status?.includes('ACHETER')) { verdictEl.className = 'verdict-label buy'; }
+    else if (data.ai_status?.includes('VENDRE')) { verdictEl.className = 'verdict-label sell'; }
+    else { verdictEl.className = 'verdict-label wait'; }
+
+    // RSI Bar
+    const rsi = data.rsi || 50;
+    const rsiColor = rsi > 70 ? '#ef4444' : rsi < 35 ? '#22c55e' : '#f59e0b';
+    document.getElementById('rsi-bar').style.width = `${rsi}%`;
+    document.getElementById('rsi-bar').style.background = rsiColor;
+    document.getElementById('rsi-val').textContent = rsi.toFixed(1);
+
+    // MACD Bar (normalize around 0)
+    const macdRaw = data.macd || 0;
+    const macdPct = Math.min(100, Math.max(0, (macdRaw + 5) * 10)); // Scale
+    const macdColor = macdRaw > 0 ? '#22c55e' : '#ef4444';
+    document.getElementById('macd-bar').style.width = `${macdPct}%`;
+    document.getElementById('macd-bar').style.background = macdColor;
+    document.getElementById('macd-val').textContent = macdRaw.toFixed(2);
+
+    // VWAP signal
+    const vwapPct = data.vwap_signal_pct ?? 50;
+    const vwapColor = vwapPct > 50 ? '#22c55e' : '#ef4444';
+    document.getElementById('vwap-bar').style.width = `${vwapPct}%`;
+    document.getElementById('vwap-bar').style.background = vwapColor;
+    document.getElementById('vwap-val').textContent = vwapPct > 50 ? 'Au-dessus' : 'En-dessous';
+
+    // Confidence score (simple aggregate)
+    let confidence = 50;
+    if (data.rsi) {
+        if (data.ai_status?.includes('ACHETER') && data.rsi < 35) confidence = 78;
+        else if (data.ai_status?.includes('VENDRE') && data.rsi > 70) confidence = 82;
+        else confidence = 55;
+    }
+    confEl.textContent = `${confidence}% confiance`;
+}
+
+function updateStats(data) {
+    document.getElementById('s-price').textContent = `${data.price.toFixed(2)} €`;
+    const sign = data.change >= 0 ? '+' : '';
+    const s = document.getElementById('s-change');
+    s.textContent = `${sign}${data.change.toFixed(2)}%`;
+    s.className = `stat-big ${data.change >= 0 ? 'positive' : 'negative'}`;
+    document.getElementById('s-high52').textContent = data.high52 ? `${data.high52.toFixed(2)} €` : '--';
+    document.getElementById('s-low52').textContent = data.low52 ? `${data.low52.toFixed(2)} €` : '--';
+}
+
+/* =================== SCREENER =================== */
+function renderScreener(assets) {
+    const list = document.getElementById('screener-list');
+    list.innerHTML = '';
+    if (assets.length === 0) {
+        list.innerHTML = '<div class="loading-state"><div class="spinner"></div><p>Chargement...</p></div>';
+        return;
+    }
+    assets.forEach((asset, i) => {
+        const item = buildScreenerItem(asset, i + 1);
+        list.appendChild(item);
+    });
+}
+
+function buildScreenerItem(asset, rank) {
+    const div = document.createElement('div');
+    div.className = 'screener-item';
+
+    const isPos = asset.change >= 0;
+    const sign = isPos ? '+' : '';
+    const aiBadgeClass = asset.ai_status?.includes('ACHETER') ? 'buy' : asset.ai_status?.includes('VENDRE') ? 'sell' : 'wait';
+    const aiBadgeText = asset.ai_status?.includes('ACHETER') ? '↑ Achat' : asset.ai_status?.includes('VENDRE') ? '↓ Vente' : '~ Neutre';
+
+    div.innerHTML = `
+        <div class="item-rank">${rank}</div>
+        <div class="item-info">
+            <span class="sym">${asset.name || asset.isin}</span>
+            <span class="nm">${asset.isin}</span>
+        </div>
+        <div class="item-price">
+            <span class="pv">${asset.price.toFixed(2)} €</span>
+            <span class="ai-badge ${aiBadgeClass}">${aiBadgeText}</span>
+        </div>
+        <span class="item-change ${isPos ? 'positive' : 'negative'}">${sign}${asset.change.toFixed(2)}%</span>
+    `;
+
+    div.addEventListener('click', () => {
+        loadAssetDetail(asset.isin);
+        switchTab('home');
+    });
+
+    return div;
+}
+
+function renderFavorites() {
+    const list = document.getElementById('favorites-list');
+    list.innerHTML = '';
+    const favs = STATE.allAssets.filter(a => STATE.favorites.includes(a.isin));
+    if (favs.length === 0) {
+        list.innerHTML = '<p class="empty-state">Aucun favori. Ajoutez des actifs depuis le Screener.</p>';
+        return;
+    }
+    favs.forEach((asset, i) => list.appendChild(buildScreenerItem(asset, i + 1)));
+}
+
+function toggleFavorite(isin) {
+    const idx = STATE.favorites.indexOf(isin);
+    if (idx > -1) STATE.favorites.splice(idx, 1);
+    else STATE.favorites.push(isin);
+    localStorage.setItem('pea_favorites', JSON.stringify(STATE.favorites));
+}
+
+/* =================== OPPORTUNITIES =================== */
+async function fetchOpportunities() {
+    if (!STATE.apiOnline) {
+        renderOpportunities(getMockOpportunities());
+        return;
+    }
+    try {
+        const res = await fetch(`${API_URL}/opportunities`, { signal: AbortSignal.timeout(30000) });
+        if (!res.ok) throw new Error('API error');
+        const data = await res.json();
+        renderOpportunities(data);
+        updateDashboardOppWidget(data);
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+        const el = document.getElementById('opp-last-update');
+        if (el) el.textContent = `Dernière analyse : ${timeStr}`;
+    } catch (e) {
+        console.warn('Opportunity fetch failed:', e);
+        renderOpportunities(getMockOpportunities());
+    }
+}
+
+function renderOpportunities(opportunities) {
+    const list = document.getElementById('opp-list');
+    if (!list) return;
+    list.innerHTML = '';
+
+    if (opportunities.length === 0) {
+        list.innerHTML = '<p class="empty-state">Aucune opportunité détectée pour le moment. Le marché est neutre.</p>';
+        return;
+    }
+
+    opportunities.forEach(opp => {
+        const card = document.createElement('div');
+        const isForte = opp.score >= 70;
+        const isMedium = opp.score >= 45 && opp.score < 70;
+        card.className = `opp-card ${isForte ? 'forte-card' : isMedium ? 'medium-card' : ''}`;
+
+        const scoreColor = isForte ? 'var(--green)' : isMedium ? 'var(--accent)' : 'var(--amber)';
+        const badgeClass = isForte ? 'forte' : isMedium ? 'medium' : 'watch';
+        const sign = opp.change >= 0 ? '+' : '';
+        const changeColor = opp.change >= 0 ? 'var(--green)' : 'var(--red)';
+
+        card.innerHTML = `
+            <div class="opp-card-header">
+                <div>
+                    <span class="opp-badge ${badgeClass} opp-card-badge">${opp.label}</span>
+                    <span class="opp-name">${opp.name}</span>
+                    <span class="opp-isin">${opp.isin}</span>
+                </div>
+                <div class="opp-score-ring">
+                    <span class="score-num" style="color:${scoreColor}">${opp.score}</span>
+                    <span class="score-label">/ 100</span>
+                </div>
+            </div>
+            <div class="opp-stats">
+                <div class="opp-stat">
+                    <span class="opp-stat-label">Prix</span>
+                    <strong>${opp.price.toFixed(2)} €</strong>
+                </div>
+                <div class="opp-stat">
+                    <span class="opp-stat-label">Variation</span>
+                    <strong style="color:${changeColor}">${sign}${opp.change.toFixed(2)}%</strong>
+                </div>
+                <div class="opp-stat">
+                    <span class="opp-stat-label">RSI</span>
+                    <strong style="color:${opp.rsi < 35 ? 'var(--green)' : opp.rsi > 70 ? 'var(--red)' : 'var(--text)'}">${opp.rsi}</strong>
+                </div>
+                <div class="opp-stat">
+                    <span class="opp-stat-label">52w Bas</span>
+                    <strong>${opp.low52?.toFixed(2) ?? '--'} €</strong>
+                </div>
+            </div>
+            <div class="opp-reasons">
+                ${(opp.reasons || []).map(r => `<div class="opp-reason">${r}</div>`).join('')}
+            </div>
+        `;
+
+        card.addEventListener('click', () => {
+            loadAssetDetail(opp.isin);
+            switchTab('home');
+        });
+
+        list.appendChild(card);
+    });
+}
+
+function updateDashboardOppWidget(opportunities) {
+    // Remove existing widget if any
+    const existing = document.getElementById('opp-dashboard-widget');
+    if (existing) existing.remove();
+
+    const top3 = opportunities.slice(0, 3);
+    if (top3.length === 0) return;
+
+    const widget = document.createElement('div');
+    widget.id = 'opp-dashboard-widget';
+    widget.className = 'opp-widget';
+    widget.innerHTML = `
+        <div class="opp-widget-header">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+            Top Opportunités IA détectées
+        </div>
+        <div class="opp-widget-items">
+            ${top3.map(o => `
+                <div class="opp-widget-item" data-isin="${o.isin}">
+                    <span><strong>${o.name}</strong> · RSI ${o.rsi}</span>
+                    <span style="color:var(--green);font-weight:700;">Score ${o.score}/100</span>
+                </div>
+            `).join('')}
+        </div>
+    `;
+
+    widget.querySelectorAll('.opp-widget-item').forEach(el => {
+        el.addEventListener('click', () => {
+            loadAssetDetail(el.getAttribute('data-isin'));
+        });
+    });
+
+    // Insert before chart panel
+    const chartPanel = document.querySelector('.chart-panel');
+    if (chartPanel) chartPanel.parentNode.insertBefore(widget, chartPanel);
+}
+
+/* =================== PORTFOLIO =================== */
+function setupPortfolio() {
+    document.getElementById('pw-edit-btn')?.addEventListener('click', () => {
+        const isin = STATE.currentIsin;
+        const pos = STATE.portfolio[isin];
+        document.getElementById('pf-shares').value = pos?.shares || '';
+        document.getElementById('pf-avg').value = pos?.avgPrice || '';
+        document.getElementById('portfolio-form').style.display = 'block';
+        document.getElementById('portfolio-widget').style.display = 'none';
+    });
+
+    document.getElementById('pf-save')?.addEventListener('click', () => {
+        const isin = STATE.currentIsin;
+        const shares = parseFloat(document.getElementById('pf-shares').value);
+        const avgPrice = parseFloat(document.getElementById('pf-avg').value);
+        if (!isNaN(shares) && shares > 0 && !isNaN(avgPrice)) {
+            STATE.portfolio[isin] = { shares, avgPrice };
+            localStorage.setItem('pea_portfolio', JSON.stringify(STATE.portfolio));
+        } else {
+            delete STATE.portfolio[isin];
+            localStorage.setItem('pea_portfolio', JSON.stringify(STATE.portfolio));
+        }
+        document.getElementById('portfolio-form').style.display = 'none';
+        updatePortfolioDisplay(STATE.lastPrice);
+    });
+
+    document.getElementById('pf-cancel')?.addEventListener('click', () => {
+        document.getElementById('portfolio-form').style.display = 'none';
+        const pos = STATE.portfolio[STATE.currentIsin];
+        document.getElementById('portfolio-widget').style.display = pos ? 'flex' : 'none';
+    });
+}
+
+function updatePortfolioDisplay(currentPrice) {
+    const isin = STATE.currentIsin;
+    const pos = STATE.portfolio[isin];
+    const widget = document.getElementById('portfolio-widget');
+    const form = document.getElementById('portfolio-form');
+
+    if (!pos || !currentPrice) {
+        // Show "Ajouter position" compact button instead
+        widget.style.display = 'flex';
+        document.getElementById('pw-shares').textContent = 'Aucune position';
+        document.getElementById('pw-pnl').textContent = '+ Ajouter';
+        document.getElementById('pw-pnl').className = 'pw-pnl';
+        return;
+    }
+
+    if (form.style.display === 'block') return; // Don't update while editing
+
+    const pnl = (currentPrice - pos.avgPrice) * pos.shares;
+    const pnlPct = ((currentPrice - pos.avgPrice) / pos.avgPrice * 100);
+    const sign = pnl >= 0 ? '+' : '';
+
+    widget.style.display = 'flex';
+    document.getElementById('pw-shares').textContent = `${pos.shares} × @ ${pos.avgPrice.toFixed(2)}€`;
+    const pnlEl = document.getElementById('pw-pnl');
+    pnlEl.textContent = `${sign}${pnl.toFixed(2)}€ (${sign}${pnlPct.toFixed(1)}%)`;
+    pnlEl.className = `pw-pnl ${pnl >= 0 ? 'pos' : 'neg'}`;
+}
+
+/* =================== ALERTS =================== */
+
+
+function renderAlerts() {
+    const list = document.getElementById('alert-list');
+    list.innerHTML = '';
+    STATE.alerts.forEach((alert, i) => {
+        const div = document.createElement('div');
+        div.className = `alert-item ${alert.triggered ? 'triggered' : ''}`;
+        div.innerHTML = `
+            <div>
+                <strong>${alert.isin}</strong>
+                <span style="color:var(--text-2);margin-left:8px;font-size:0.8rem;">
+                    ${alert.type === 'above' ? '↑ Au-dessus de' : '↓ En-dessous de'} ${alert.price} €
+                </span>
+                ${alert.triggered ? '<span style="color:var(--amber);font-size:0.75rem;display:block;margin-top:2px;">⚡ Déclenchée</span>' : ''}
+            </div>
+            <button class="alert-del" data-idx="${i}">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+        `;
+        div.querySelector('.alert-del').addEventListener('click', () => {
+            STATE.alerts.splice(i, 1);
+            localStorage.setItem('pea_alerts', JSON.stringify(STATE.alerts));
+            renderAlerts();
+        });
+        list.appendChild(div);
+    });
+}
+
+function populateAlertSelect() {
+    const select = document.getElementById('alert-asset');
+    if (!select) return;
+    
+    // Default option
+    select.innerHTML = '<option value="">— Choisir un actif —</option>';
+    
+    if (STATE.favorites.length === 0) {
+        const noFav = document.createElement('div');
+        noFav.className = 'alert-no-favs';
+        noFav.innerHTML = 'Vous devez d\'abord ajouter des favoris (⭐) pour pouvoir créer une alerte.';
+        if (!select.nextElementSibling || !select.nextElementSibling.classList.contains('alert-no-favs')) {
+            select.parentNode.insertBefore(noFav, select.nextSibling);
+        }
+        select.disabled = true;
+        return;
+    } else {
+        select.disabled = false;
+        const noFav = document.parentNode?.querySelector('.alert-no-favs');
+        if (noFav) noFav.remove();
+    }
+
+    STATE.favorites.forEach(isin => {
+        const asset = STATE.allAssets.find(a => a.isin === isin);
+        const name = asset ? asset.name : isin;
+        const opt = document.createElement('option');
+        opt.value = isin;
+        opt.textContent = `${name} (${isin})`;
+        select.appendChild(opt);
+    });
+}
+
+function checkAlerts(data) {
+
+    let triggered = false;
+    STATE.alerts.forEach(alert => {
+        if (alert.isin !== data.isin || alert.triggered) return;
+        if (alert.type === 'above' && data.price >= alert.price) { alert.triggered = true; triggered = true; }
+        if (alert.type === 'below' && data.price <= alert.price) { alert.triggered = true; triggered = true; }
+    });
+    if (triggered) {
+        localStorage.setItem('pea_alerts', JSON.stringify(STATE.alerts));
+        if (Notification.permission === 'granted') {
+            new Notification(`⚡ Alerte PEA Déclenchée !`, { body: `${data.name} à ${data.price.toFixed(2)} €`, icon: './icon.png' });
+        }
+    }
+}
+
+/* =================== CONTROLS SETUP =================== */
+function setupControls() {
+    // Timeframe buttons
+    document.querySelectorAll('.tf-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            STATE.currentTimeframe = btn.getAttribute('data-tf');
+            await loadAssetDetail(STATE.currentIsin);
+        });
+    });
+
+    // Volume toggle
+    document.getElementById('show-volume').addEventListener('change', (e) => {
+        document.getElementById('volume-panel').style.display = e.target.checked ? 'block' : 'none';
+    });
+
+    // VWAP toggle
+    document.getElementById('show-vwap').addEventListener('change', () => {
+        if (STATE.priceChart) {
+            STATE.priceChart.data.datasets[1].hidden = !document.getElementById('show-vwap').checked;
+            STATE.priceChart.update();
+        }
+    });
+
+    // Chart Type buttons
+    document.querySelectorAll('.ct-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.ct-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            const type = btn.getAttribute('data-ct');
+            switchChartType(type);
+        });
+    });
+
+    // Search
+    document.getElementById('search-input').addEventListener('input', (e) => {
+        const q = e.target.value.toLowerCase();
+        const filtered = STATE.allAssets.filter(a => a.isin.toLowerCase().includes(q) || (a.name||'').toLowerCase().includes(q));
+        renderScreener(filtered);
+    });
+
+    // Filter chips
+    document.querySelectorAll('.filter-chip').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.filter-chip').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            const f = btn.getAttribute('data-filter');
+            let filtered = STATE.allAssets;
+            if (f === 'up') filtered = filtered.filter(a => a.change >= 0);
+            if (f === 'down') filtered = filtered.filter(a => a.change < 0);
+            if (f === 'buy') filtered = filtered.filter(a => a.ai_status?.includes('ACHETER'));
+            renderScreener(filtered);
+        });
+    });
+
+    // Refresh scan
+    document.getElementById('refresh-scan').addEventListener('click', async () => {
+        const btn = document.getElementById('refresh-scan');
+        btn.classList.add('spinning');
+        try {
+            const res = await fetch(`${API_URL}/scan`);
+            if (res.ok) { STATE.allAssets = await res.json(); renderScreener(STATE.allAssets); }
+        } catch(e) { console.warn(e); }
+        setTimeout(() => btn.classList.remove('spinning'), 1000);
+    });
+
+    // Refresh opportunities
+    const refreshOppBtn = document.getElementById('refresh-opp');
+    if (refreshOppBtn) {
+        refreshOppBtn.addEventListener('click', async () => {
+            refreshOppBtn.classList.add('spinning');
+            await fetchOpportunities();
+            setTimeout(() => refreshOppBtn.classList.remove('spinning'), 1000);
+        });
+    }
+
+    // Alert form
+    document.getElementById('create-alert-btn').addEventListener('click', () => {
+        const isin = document.getElementById('alert-asset').value.trim();
+        const type = document.getElementById('alert-type').value;
+        const price = parseFloat(document.getElementById('alert-price').value);
+        if (!isin || isNaN(price)) return;
+        STATE.alerts.push({ isin, type, price, triggered: false });
+        localStorage.setItem('pea_alerts', JSON.stringify(STATE.alerts));
+        renderAlerts();
+        document.getElementById('alert-price').value = '';
+    });
+
+    // Settings form
+    document.getElementById('save-settings-btn').addEventListener('click', () => {
+        const urlParams = document.getElementById('setting-backend-url').value.trim();
+        localStorage.setItem('pea_backend_url', urlParams);
+        if ('serviceWorker' in navigator) navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.unregister()));
+        alert("Paramètres sauvegardés. L'application va redémarrer pour appliquer la nouvelle adresse IP.");
+        window.location.reload();
+    });
+}
+
+function loadSettings() {
+    const savedBackendUrl = localStorage.getItem('pea_backend_url') || '';
+    document.getElementById('setting-backend-url').value = savedBackendUrl;
+}
+
+/* =================== NOTIFICATIONS =================== */
+function requestNotification(data) {
+    if (!('Notification' in window)) return alert('Notifications non supportées.');
+    if (Notification.permission === 'granted') {
+        new Notification(`PEA IA · ${data.name}`, {
+            body: `${data.price.toFixed(2)} € | Signal: ${data.ai_status}`,
+            icon: './icon.png'
+        });
+    } else if (Notification.permission !== 'denied') {
+        Notification.requestPermission().then(p => {
+            if (p === 'granted') requestNotification(data);
+        });
+    }
+}
+
+/* =================== HELPERS =================== */
+function formatVolume(v) {
+    if (v >= 1_000_000) return (v / 1_000_000).toFixed(1) + 'M';
+    if (v >= 1_000) return (v / 1_000).toFixed(0) + 'K';
+    return v?.toString() || '--';
+}
+
+/* =================== MOCK DATA (Mode hors-ligne) =================== */
+function getMockAssets() {
+    return [
+        { isin: 'FR0013341781', name: '2CRSI S.A.', price: 39.70, change: -4.15, trend: 'down', ai_status: 'VENDRE' },
+        { isin: 'FR0000121014', name: 'LVMH', price: 598.50, change: 1.15, trend: 'up', ai_status: 'GARDER' },
+        { isin: 'FR0000120271', name: 'TotalEnergies', price: 56.20, change: -0.85, trend: 'down', ai_status: 'GARDER' },
+        { isin: 'FR0000131104', name: 'BNP Paribas', price: 63.10, change: 2.40, trend: 'up', ai_status: 'ACHETER FORT' },
+        { isin: 'FR0000120578', name: 'Sanofi', price: 92.30, change: -0.30, trend: 'down', ai_status: 'GARDER' },
+        { isin: 'FR0000120073', name: 'Air Liquide', price: 168.50, change: 0.45, trend: 'up', ai_status: 'GARDER' },
+        { isin: 'FR0011550185', name: 'Amundi S&P 500', price: 615.10, change: -0.45, trend: 'down', ai_status: 'GARDER' },
+        { isin: 'FR0013412020', name: 'Amundi Nasdaq', price: 1045.20, change: 2.10, trend: 'up', ai_status: 'ACHETER FORT' },
+    ];
+}
+
+function getMockDetail(isin) {
+    const base = getMockAssets().find(a => a.isin === isin) || getMockAssets()[0];
+    const labels = ['09h00','09h30','10h00','10h30','11h00','11h30','12h00','12h30','13h00','13h30','14h00','14h30','15h00','15h30'];
+
+    let price = base.price + (base.change > 0 ? -1.5 : 1.5);
+    const dataseries = labels.map((_, i) => {
+        price += (Math.random() - 0.5) * (base.price * 0.008);
+        return Math.max(0.1, parseFloat(price.toFixed(2)));
+    });
+
+    const vwapSeries = dataseries.map((p, i) => {
+        const slice = dataseries.slice(0, i + 1);
+        return parseFloat((slice.reduce((a, b) => a + b, 0) / slice.length).toFixed(2));
+    });
+
+    const volumeSeries = labels.map(() => Math.floor(Math.random() * 50000 + 5000));
+    const rsi = base.change < -3 ? 28 : base.change > 3 ? 72 : 45 + Math.random() * 20;
+    const macd = base.change > 0 ? 0.3 + Math.random() : -0.3 - Math.random();
+
+    return {
+        ...base,
+        ticker: 'AL2SI.PA',
+        labels,
+        dataseries,
+        vwapSeries,
+        volumeSeries,
+        rsi: parseFloat(rsi.toFixed(1)),
+        macd: parseFloat(macd.toFixed(2)),
+        vwap_signal_pct: dataseries[dataseries.length - 1] > vwapSeries[vwapSeries.length - 1] ? 65 : 35,
+        high52: base.price * 1.25,
+        low52: base.price * 0.75,
+    };
+}
+
+function getMockOpportunities() {
+    return [
+        { isin: 'FR0013341781', name: '2CRSI S.A.', price: 38.92, change: -5.94, score: 75,
+          label: 'FORTE OPPORTUNITÉ', rsi: 22.5,
+          reasons: ["RSI extrêmement survendu (22)", "Prix proche du bas 52 semaines (5% au-dessus)", "Volume ×2.3 (accumulation institutionnelle)"],
+          low52: 37.10, high52: 54.00 },
+        { isin: 'FR0000120271', name: 'TotalEnergies', price: 55.10, change: -5.25, score: 50,
+          label: 'OPPORTUNITÉ', rsi: 38.2,
+          reasons: ["RSI survendu (38)", "MACD croisement haussier", "Zone basse annuelle"],
+          low52: 48.50, high52: 72.00 },
+        { isin: 'FR0000125007', name: 'Saint-Gobain', price: 81.44, change: 4.57, score: 25,
+          label: 'À SURVEILLER', rsi: 45.0,
+          reasons: ["RSI en zone d'opportunité (45)"],
+          low52: 58.00, high52: 92.00 },
+    ];
+}

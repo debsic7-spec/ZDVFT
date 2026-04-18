@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+Bourse/
+*.json
+!manifest.json
+subs.json
+alerts.json
+.env

@@ -1,0 +1,23 @@
+{
+    "name": "PEA Tracker IA",
+    "short_name": "PEA App",
+    "description": "Suivi des investissements PEA avec analyse d'IA",
+    "start_url": "./index.html",
+    "display": "standalone",
+    "background_color": "#0a0b10",
+    "theme_color": "#0a0b10",
+    "orientation": "portrait",
+    "icons": [
+        {
+            "src": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxOTIiIGhlaWdodD0iMTkyIiB2aWV3Qm94PSIwIDAgMTkyIDE5MiI+PHJlY3Qgd2lkdGg9IjE5MiIgaGVpZ2h0PSIxOTIiIGZpbGw9IiMwYTBiMTAiLz48cGF0aCBkPSJNOTYgMzJMMTMyIDk2SDEwOFYxNjBIODRWOTZINjBMMTYgMzJaIiBmaWxsPSIjNWM1MGY2Ii8+PC9zdmc+",
+            "sizes": "192x192",
+            "type": "image/svg+xml",
+            "purpose": "any maskable"
+        },
+        {
+            "src": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI1MTIiIGhlaWdodD0iNTEyIiB2aWV3Qm94PSIwIDAgNTEyIDUxMiI+PHJlY3Qgd2lkdGg9IjUxMiIgaGVpZ2h0PSI1MTIiIGZpbGw9IiMwYTBiMTAiLz48cGF0aCBkPSJNMjU2IDg1TDM1MiAyNTZIMjg4VjQyN0gyMjRWMjU2SDE2MEwyNTYgODVaIiBmaWxsPSIjNWM1MGY2Ii8+PC9zdmc+",
+            "sizes": "512x512",
+            "type": "image/svg+xml"
+        }
+    ]
+}

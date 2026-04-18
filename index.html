@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <link rel="manifest" href="./manifest.json">
+    <meta name="theme-color" content="#080c14">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>PEA Tracker IA</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiBmaWxsPSIjMDgwYzE0IiByeD0iOCIvPjxwYXRoIGQ9Ik04IDI0TDE2IDhMMjQgMjQiIHN0cm9rZT0iIzYzNjZmMSIgc3Ryb2tlLXdpZHRoPSIzIiBmaWxsPSJub25lIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+PC9zdmc+">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.1.1/dist/chartjs-chart-financial.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+    <link rel="stylesheet" href="./style.css?v=4">
+</head>
+<body>
+<div id="app">
+    <!-- SIDEBAR NAV (replaced bottom nav with sidebar on large screens) -->
+    <nav id="sidebar">
+        <div class="logo">
+            <svg width="28" height="28" viewBox="0 0 32 32"><rect width="32" height="32" fill="#6366f1" rx="8"/><path d="M8 24L16 8L24 24" stroke="white" stroke-width="3" fill="none" stroke-linejoin="round"/></svg>
+            <span>PEA<b>AI</b></span>
+        </div>
+        <div class="nav-items">
+            <button class="nav-item active" data-tab="home">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+                <span>Dashboard</span>
+            </button>
+            <button class="nav-item" data-tab="opportunities">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                <span>Opportunités</span>
+            </button>
+            <button class="nav-item" data-tab="search">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                <span>Screener</span>
+            </button>
+            <button class="nav-item" data-tab="favorites">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+                <span>Favoris</span>
+            </button>
+            <button class="nav-item" data-tab="alerts">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                <span>Alertes</span>
+            </button>
+            <button class="nav-item" data-tab="settings">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                <span>Paramètres</span>
+            </button>
+        </div>
+        <div class="sidebar-footer">
+            <div class="api-status" id="api-status-dot">
+                <div class="status-dot offline"></div>
+                <span>API Offline</span>
+            </div>
+            <div class="refresh-countdown" id="refresh-countdown">
+                <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+                <span>Refresh dans <b id="countdown-sec">30</b>s</span>
+            </div>
+        </div>
+    </nav>
+
+    <!-- MAIN CONTENT -->
+    <main id="main">
+        <!-- ============== TAB: DASHBOARD ============== -->
+        <section id="tab-home" class="tab active">
+            <div class="page-header">
+                <div class="header-title-block">
+                    <h1 id="asset-name">2CRSI S.A.</h1>
+                    <span id="asset-isin" class="isin-badge">FR0013341781 · AL2SI.PA</span>
+                </div>
+                <div class="header-right">
+                    <div class="price-block">
+                        <span id="current-price" class="big-price">---.-- €</span>
+                        <span id="current-change" class="change-badge">---%</span>
+                    </div>
+                    <button id="fav-toggle-btn" title="Ajouter aux favoris">
+                        <svg id="fav-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+                    </button>
+                    <button id="noti-btn" title="Activer notifications">
+                        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                    </button>
+                </div>
+            </div>
+
+            <!-- PORTFOLIO MINI WIDGET -->
+            <div class="portfolio-widget glass" id="portfolio-widget" style="display:none;">
+                <div class="pw-left">
+                    <span class="pw-label">Ma position</span>
+                    <span class="pw-val" id="pw-shares">-- actions @ --€</span>
+                </div>
+                <div class="pw-right">
+                    <span class="pw-label">P&amp;L</span>
+                    <span class="pw-pnl" id="pw-pnl">+0.00 €</span>
+                </div>
+                <button class="pw-edit" id="pw-edit-btn" title="Modifier position">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                </button>
+            </div>
+
+            <!-- PORTFOLIO INPUT FORM (hidden by default) -->
+            <div class="portfolio-form glass" id="portfolio-form" style="display:none;">
+                <div class="pf-row">
+                    <label>Nb d'actions</label>
+                    <input type="number" id="pf-shares" placeholder="Ex: 10" min="0" step="1">
+                </div>
+                <div class="pf-row">
+                    <label>Prix d'achat moyen (€)</label>
+                    <input type="number" id="pf-avg" placeholder="Ex: 42.50" min="0" step="0.01">
+                </div>
+                <div class="pf-btns">
+                    <button id="pf-save">Enregistrer</button>
+                    <button id="pf-cancel" class="secondary">Annuler</button>
+                </div>
+            </div>
+
+            <!-- CHART AREA -->
+            <div class="chart-panel glass">
+                <div class="chart-toolbar">
+                    <div class="chart-timeframes">
+                        <button class="tf-btn active" data-tf="1d">1J</button>
+                        <button class="tf-btn" data-tf="5d">1S</button>
+                        <button class="tf-btn" data-tf="1mo">1M</button>
+                        <button class="tf-btn" data-tf="6mo">6M</button>
+                        <button class="tf-btn" data-tf="1y">1A</button>
+                    </div>
+                    <div class="chart-indicators">
+                        <div class="chart-type-btns">
+                            <button class="ct-btn active" data-ct="line" title="Ligne">
+                                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 17 9 11 13 15 21 7"/></svg>
+                            </button>
+                            <button class="ct-btn" data-ct="area" title="Aire">
+                                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17l6-6 4 4 8-8V20H3z"/></svg>
+                            </button>
+                            <button class="ct-btn" data-ct="bar" title="Barres">
+                                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="4" height="10" rx="1"/><rect x="10" y="6" width="4" height="15" rx="1"/><rect x="17" y="3" width="4" height="18" rx="1"/></svg>
+                            </button>
+                            <button class="ct-btn" data-ct="candle" title="Bougies">
+                                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="8" width="4" height="10" rx="1"/><line x1="6" y1="4" x2="6" y2="8"/><line x1="6" y1="18" x2="6" y2="22"/><rect x="16" y="5" width="4" height="8" rx="1"/><line x1="18" y1="2" x2="18" y2="5"/><line x1="18" y1="13" x2="18" y2="20"/></svg>
+                            </button>
+                        </div>
+                        <label class="indicator-toggle">
+                            <input type="checkbox" id="show-vwap" checked>
+                            <span class="toggle-label vwap">VWAP</span>
+                        </label>
+                        <label class="indicator-toggle">
+                            <input type="checkbox" id="show-volume">
+                            <span class="toggle-label vol">VOL</span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Main Price Chart -->
+                <div class="chart-wrapper">
+                    <canvas id="priceChart"></canvas>
+                    <div id="chart-crosshair-value" class="crosshair-tooltip" style="display:none;"></div>
+                </div>
+
+                <!-- Volume Chart -->
+                <div class="volume-wrapper" id="volume-panel" style="display:none;">
+                    <canvas id="volumeChart"></canvas>
+                </div>
+
+                <!-- Stats Row -->
+                <div class="stats-row">
+                    <div class="stat"><span class="stat-label">Ouv.</span><span class="stat-val" id="stat-open">--</span></div>
+                    <div class="stat"><span class="stat-label">Haut</span><span class="stat-val positive" id="stat-high">--</span></div>
+                    <div class="stat"><span class="stat-label">Bas</span><span class="stat-val negative" id="stat-low">--</span></div>
+                    <div class="stat"><span class="stat-label">VWAP</span><span class="stat-val accent" id="stat-vwap">--</span></div>
+                    <div class="stat"><span class="stat-label">Vol</span><span class="stat-val" id="stat-vol">--</span></div>
+                </div>
+            </div>
+
+            <!-- AI + INDICATORS GRID -->
+            <div class="bottom-grid">
+                <!-- AI Decision Card -->
+                <div class="ai-card glass" id="ai-card">
+                    <div class="ai-card-header">
+                        <div class="ai-icon-wrap">
+                            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
+                        </div>
+                        <h3>Analyse IA</h3>
+                        <span class="ai-confidence" id="ai-confidence">--% confiance</span>
+                    </div>
+                    <div class="ai-verdict" id="ai-verdict">
+                        <div class="verdict-label wait" id="verdict-text">ANALYSE...</div>
+                        <div class="verdict-detail" id="verdict-detail">Chargement des indicateurs techniques...</div>
+                    </div>
+                    <div class="ai-indicators">
+                        <div class="ind-row">
+                            <span class="ind-name">RSI (14)</span>
+                            <div class="ind-bar"><div class="ind-fill" id="rsi-bar" style="width:50%;background:#ffa000"></div></div>
+                            <span class="ind-val" id="rsi-val">--</span>
+                        </div>
+                        <div class="ind-row">
+                            <span class="ind-name">MACD</span>
+                            <div class="ind-bar"><div class="ind-fill" id="macd-bar" style="width:50%;background:#6366f1"></div></div>
+                            <span class="ind-val" id="macd-val">--</span>
+                        </div>
+                        <div class="ind-row">
+                            <span class="ind-name">Signal VWAP</span>
+                            <div class="ind-bar"><div class="ind-fill" id="vwap-bar" style="width:50%;background:#0891b2"></div></div>
+                            <span class="ind-val" id="vwap-val">--</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Market Stats Card -->
+                <div class="stats-card glass">
+                    <h3>Statistiques</h3>
+                    <div class="stat-grid">
+                        <div><span class="stat-label">Prix actuel</span><span class="stat-big" id="s-price">--</span></div>
+                        <div><span class="stat-label">Variation J</span><span class="stat-big" id="s-change">--</span></div>
+                        <div><span class="stat-label">52w Haut</span><span class="stat-big positive" id="s-high52">--</span></div>
+                        <div><span class="stat-label">52w Bas</span><span class="stat-big negative" id="s-low52">--</span></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============== TAB: OPPORTUNITÉS (AUTO SCAN) ============== -->
+        <section id="tab-opportunities" class="tab">
+            <div class="page-header">
+                <div>
+                    <h1>Opportunités IA</h1>
+                    <p style="font-size:0.75rem;color:var(--text-2);margin-top:2px;">Scan automatique toutes les 5 min · <span id="opp-last-update">--</span></p>
+                </div>
+                <button class="refresh-btn" id="refresh-opp">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                    Scanner
+                </button>
+            </div>
+            <div class="opp-legend">
+                <span class="opp-badge forte">FORTE OPPORTUNITÉ</span>
+                <span class="opp-badge medium">OPPORTUNITÉ</span>
+                <span class="opp-badge watch">À SURVEILLER</span>
+            </div>
+            <div id="opp-list" class="opp-list">
+                <div class="loading-state"><div class="spinner"></div><p>Analyse en cours...</p></div>
+            </div>
+        </section>
+
+        <!-- ============== TAB: SCREENER ============== -->
+        <section id="tab-search" class="tab">
+            <div class="page-header">
+                <h1>Screener PEA</h1>
+                <button class="refresh-btn" id="refresh-scan">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                    Scanner
+                </button>
+            </div>
+            <div class="search-bar">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                <input type="text" id="search-input" placeholder="Rechercher ISIN, symbole ou nom...">
+            </div>
+            <div class="filter-row">
+                <button class="filter-chip active" data-filter="all">Tous</button>
+                <button class="filter-chip" data-filter="up">↑ Hausse</button>
+                <button class="filter-chip" data-filter="down">↓ Baisse</button>
+                <button class="filter-chip" data-filter="buy">IA: Achat</button>
+            </div>
+            <div id="screener-list" class="screener-list">
+                <div class="loading-state">
+                    <div class="spinner"></div>
+                    <p>Chargement du screener...</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============== TAB: FAVORIS ============== -->
+        <section id="tab-favorites" class="tab">
+            <div class="page-header"><h1>Mes Favoris</h1></div>
+            <div id="favorites-list" class="screener-list">
+                <p class="empty-state">Aucun favori. Ajoutez des actifs depuis le Screener.</p>
+            </div>
+        </section>
+
+        <!-- ============== TAB: ALERTES ============== -->
+        <section id="tab-alerts" class="tab">
+            <div class="page-header"><h1>Alertes Prix</h1></div>
+            <div class="alert-form glass">
+                <h3>Créer une Alerte</h3>
+                <div class="form-row">
+                    <label>Actif (depuis vos Favoris)</label>
+                    <select id="alert-asset" class="alert-asset-select">
+                        <option value="">— Choisir un actif —</option>
+                    </select>
+                </div>
+                <div class="form-row">
+                    <label>Type</label>
+                    <select id="alert-type">
+                        <option value="above">Prix au-dessus de</option>
+                        <option value="below">Prix en-dessous de</option>
+                    </select>
+                </div>
+                <div class="form-row">
+                    <label>Prix cible (€)</label>
+                    <input type="number" id="alert-price" placeholder="Ex: 42.00" step="0.01">
+                </div>
+                <button id="create-alert-btn" class="cta-btn">Créer l'alerte</button>
+            </div>
+            <div id="alert-list" class="alert-list"></div>
+        </section>
+
+        <!-- ============== TAB: PARAMÈTRES (POUR APK) ============== -->
+        <section id="tab-settings" class="tab">
+            <div class="page-header"><h1>Paramètres</h1></div>
+            <div class="alert-form glass">
+                <h3>Serveur Backend (Mode Mobile/APK)</h3>
+                <p style="font-size:0.85rem;color:var(--text-2);margin-bottom:15px;">
+                    Si vous utilisez l'application en tant qu'APK ou sur votre Poco F7, vous devez indiquer l'adresse IP locale de votre PC (ex: 192.168.1.50) ou l'adresse du serveur public. Sans cela, l'application ne pourra pas contacter le backend Python.
+                </p>
+                <div class="form-row">
+                    <label>Adresse IP ou URL du Backend</label>
+                    <input type="text" id="setting-backend-url" placeholder="Ex: 192.168.1.50" value="">
+                </div>
+                <button id="save-settings-btn" class="cta-btn">Sauvegarder et Redémarrer</button>
+            </div>
+            
+            <div class="alert-form glass" style="margin-top:20px;">
+                <h3>Comment compiler en APK ?</h3>
+                <ol style="font-size:0.85rem;color:var(--text-2);line-height:1.6;margin-left:20px;margin-top:10px;">
+                    <li><strong>Méthode PWA Native (Recommandé) :</strong> Hébergez l'application sur internet (via GitHub Pages). Visitez le lien depuis Chrome sur votre Poco F7 et cliquez sur <em>"Ajouter à l'écran d'accueil"</em>. Elle s'installera comme une application native sans créer d'APK !</li>
+                    <li><strong>Méthode APK :</strong> Rendez-vous sur <strong>PWABuilder.com</strong>, entrez l'URL de votre application déployée. Le site va packager votre PWA et vous générera un fichier <code>.apk</code> à installer sur votre Android.</li>
+                </ol>
+            </div>
+        </section>
+    </main>
+
+    <!-- MOBILE BOTTOM NAV -->
+    <nav id="mobile-nav">
+        <button class="m-nav active" data-tab="home">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        </button>
+        <button class="m-nav" data-tab="opportunities">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+        </button>
+        <button class="m-nav" data-tab="search">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        </button>
+        <button class="m-nav" data-tab="favorites">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+        </button>
+        <button class="m-nav" data-tab="alerts">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+        </button>
+        <button class="m-nav" data-tab="settings">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
+    </nav>
+</div>
+<script src="./app.js"></script>
+</body>
+</html>
