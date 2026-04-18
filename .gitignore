@@ -1,0 +1,10 @@
+.venv/
+build/
+data/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+.buildozer/
+*.spec.bak
