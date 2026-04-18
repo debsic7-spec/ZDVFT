@@ -118,9 +118,7 @@ def get_asset_data(isin: str):
     use_daily = False
     
     try:
-        df_intra = stock.history(period="1d", interval="15m")
-        if df_intra.empty:
-            df_intra = stock.history(period="5d", interval="30m")
+        df_intra = stock.history(period="5d", interval="15m")
         if not df_intra.empty:
             last_day = df_intra.index[-1].date()
             df_intra = df_intra[df_intra.index.date == last_day].copy()
