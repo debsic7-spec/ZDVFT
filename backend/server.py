@@ -123,13 +123,25 @@ def _get_asset_data_impl(isin: str):
     name, ticker = ASSET_MAPPING[isin]
     stock = yf.Ticker(ticker)
 
-    # --- Try intraday first, fall back to daily ---
+    # --- Single daily call for price/change/52w/indicators ---
+    df_long = stock.history(period="1y", interval="1d")
+    if isinstance(df_long.columns, pd.MultiIndex):
+        df_long.columns = df_long.columns.get_level_values(0)
+    if df_long.empty:
+        raise HTTPException(status_code=400, detail="No daily data available")
+
+    current_price = round(float(df_long['Close'].iloc[-1]), 2)
+    prev_close = float(df_long['Close'].iloc[-2]) if len(df_long) > 1 else current_price
+    change_pct = round((current_price - prev_close) / prev_close * 100, 2)
+    high52 = round(float(df_long['High'].max()), 2)
+    low52 = round(float(df_long['Low'].min()), 2)
+
+    # --- Single intraday call ---
     df_intra = pd.DataFrame()
     use_daily = False
-    
+
     try:
         df_intra = stock.history(period="5d", interval="5m")
-        # Flatten MultiIndex columns if present
         if isinstance(df_intra.columns, pd.MultiIndex):
             df_intra.columns = df_intra.columns.get_level_values(0)
         if not df_intra.empty:
@@ -139,27 +151,10 @@ def _get_asset_data_impl(isin: str):
         print(f"Intraday 5m error for {ticker}: {e}")
         df_intra = pd.DataFrame()
 
-    # Fallback to 15m if 5m is empty
-    if df_intra.empty or len(df_intra) < 2:
-        try:
-            df_intra = stock.history(period="5d", interval="15m")
-            if isinstance(df_intra.columns, pd.MultiIndex):
-                df_intra.columns = df_intra.columns.get_level_values(0)
-            if not df_intra.empty:
-                last_day = df_intra.index[-1].date()
-                df_intra = df_intra[df_intra.index.date == last_day].copy()
-        except Exception as e:
-            print(f"Intraday 15m error for {ticker}: {e}")
-            df_intra = pd.DataFrame()
-
     if df_intra.empty or len(df_intra) < 2:
         # Fallback: use last 30 daily candles
         use_daily = True
-        df_intra = stock.history(period="30d", interval="1d")
-        if isinstance(df_intra.columns, pd.MultiIndex):
-            df_intra.columns = df_intra.columns.get_level_values(0)
-        if df_intra.empty:
-            raise HTTPException(status_code=400, detail="No data available for this asset")
+        df_intra = df_long.tail(30).copy()
 
     # --- VWAP ---
     if 'Volume' in df_intra.columns and df_intra['Volume'].sum() > 0:
@@ -169,41 +164,6 @@ def _get_asset_data_impl(isin: str):
         df_intra['VWAP'] = df_intra['CumVP'] / df_intra['CumV']
     else:
         df_intra['VWAP'] = df_intra['Close'].rolling(window=5, min_periods=1).mean()
-
-    current_price = float(df_intra['Close'].iloc[-1])
-
-    # --- Use official daily close as reference price ---
-    df_daily = stock.history(period="10d", interval="1d")
-    if isinstance(df_daily.columns, pd.MultiIndex):
-        df_daily.columns = df_daily.columns.get_level_values(0)
-    if not df_daily.empty:
-        official_close = float(df_daily['Close'].iloc[-1])
-        current_price = official_close
-
-    # --- Change % ---
-    if len(df_daily) > 1:
-        prev_close = float(df_daily['Close'].iloc[-2])
-    else:
-        prev_close = float(df_intra['Open'].iloc[0])
-    change_pct = round((current_price - prev_close) / prev_close * 100, 2)
-
-    # --- 52w ---
-    try:
-        df_52w = stock.history(period="1y", interval="1d")
-        if isinstance(df_52w.columns, pd.MultiIndex):
-            df_52w.columns = df_52w.columns.get_level_values(0)
-        high52 = round(float(df_52w['High'].max()), 2) if not df_52w.empty else None
-        low52 = round(float(df_52w['Low'].min()), 2) if not df_52w.empty else None
-    except Exception:
-        high52 = None; low52 = None
-
-    # --- Long history for indicators ---
-    try:
-        df_long = stock.history(period="6mo", interval="1d")
-        if isinstance(df_long.columns, pd.MultiIndex):
-            df_long.columns = df_long.columns.get_level_values(0)
-    except Exception:
-        df_long = df_daily
 
     ai = compute_ai_signals(df_intra, df_long, current_price)
 
