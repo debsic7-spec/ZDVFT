@@ -358,9 +358,9 @@ function updateChart(data) {
 
     // Stats row
     const pr = data.dataseries;
-    document.getElementById('stat-open').textContent = pr[0]?.toFixed(2) + ' €' || '--';
-    document.getElementById('stat-high').textContent = Math.max(...pr).toFixed(2) + ' €';
-    document.getElementById('stat-low').textContent = Math.min(...pr).toFixed(2) + ' €';
+    document.getElementById('stat-open').textContent = (data.dayOpen ?? pr[0])?.toFixed(2) + ' €' || '--';
+    document.getElementById('stat-high').textContent = (data.dayHigh ?? Math.max(...(data.highSeries || pr))).toFixed(2) + ' €';
+    document.getElementById('stat-low').textContent = (data.dayLow ?? Math.min(...(data.lowSeries || pr))).toFixed(2) + ' €';
     const lastVwap = data.vwapSeries?.[data.vwapSeries.length - 1];
     document.getElementById('stat-vwap').textContent = lastVwap ? lastVwap.toFixed(2) + ' €' : '--';
     document.getElementById('stat-vol').textContent = data.volumeSeries ? formatVolume(data.volumeSeries.reduce((a,b) => a+b, 0)) : '--';
@@ -378,7 +378,9 @@ function switchChartType(type, data) {
     if (type === 'candle') {
         // Rebuild chart as candlestick
         STATE.priceChart.destroy();
-        const ohlcData = (data.ohlc && data.ohlc.length > 0)
+        const ohlcData = (data.openSeries && data.highSeries && data.lowSeries)
+            ? data.dataseries.map((c, i) => ({ x: i, o: data.openSeries[i], h: data.highSeries[i], l: data.lowSeries[i], c }))
+            : (data.ohlc && data.ohlc.length > 0)
             ? data.ohlc.map((d, i) => ({ x: i, o: d.o, h: d.h, l: d.l, c: d.c }))
             : data.dataseries.map((c, i) => {
                   // Simulate OHLC from close only (fallback)

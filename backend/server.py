@@ -118,7 +118,7 @@ def get_asset_data(isin: str):
     use_daily = False
     
     try:
-        df_intra = stock.history(period="5d", interval="15m")
+        df_intra = stock.history(period="5d", interval="5m")
         if not df_intra.empty:
             last_day = df_intra.index[-1].date()
             df_intra = df_intra[df_intra.index.date == last_day].copy()
@@ -178,6 +178,11 @@ def get_asset_data(isin: str):
     else:
         labels = [idx.strftime("%Hh%M") for idx in df_intra.index]
 
+    # --- Day OHLC from intraday candles ---
+    day_open = round(float(df_intra['Open'].iloc[0]), 2)
+    day_high = round(float(df_intra['High'].max()), 2)
+    day_low = round(float(df_intra['Low'].min()), 2)
+
     return {
         "isin": isin,
         "name": name,
@@ -187,8 +192,14 @@ def get_asset_data(isin: str):
         "trend": "up" if change_pct >= 0 else "down",
         "labels": labels,
         "dataseries": [round(float(v), 2) for v in df_intra['Close']],
+        "highSeries": [round(float(v), 2) for v in df_intra['High']],
+        "lowSeries": [round(float(v), 2) for v in df_intra['Low']],
+        "openSeries": [round(float(v), 2) for v in df_intra['Open']],
         "vwapSeries": [round(float(v), 2) for v in df_intra['VWAP']],
         "volumeSeries": [int(v) for v in df_intra.get('Volume', pd.Series([0]*len(df_intra))).fillna(0)],
+        "dayOpen": day_open,
+        "dayHigh": day_high,
+        "dayLow": day_low,
         "high52": high52,
         "low52": low52,
         **ai
