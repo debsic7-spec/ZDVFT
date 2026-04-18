@@ -8,3 +8,5 @@ __pycache__/
 dist/
 .buildozer/
 *.spec.bak
+.env
+
