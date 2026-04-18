@@ -14,6 +14,7 @@ src/
 config/
 tests/
 buildozer.spec
-requirements.txt
-README.md
+# Keep root requirements.txt for Railway (ignore the Kivy one)
+/README.md
+check_*.py
 
