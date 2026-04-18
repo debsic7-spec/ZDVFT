@@ -145,8 +145,13 @@ def get_asset_data(isin: str):
 
     current_price = float(df_intra['Close'].iloc[-1])
 
-    # --- Change % ---
+    # --- Use official daily close as reference price ---
     df_daily = stock.history(period="10d", interval="1d")
+    if not df_daily.empty:
+        official_close = float(df_daily['Close'].iloc[-1])
+        current_price = official_close
+
+    # --- Change % ---
     if len(df_daily) > 1:
         prev_close = float(df_daily['Close'].iloc[-2])
     else:
