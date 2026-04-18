@@ -12,9 +12,7 @@ const STATE = {
     allAssets: [],
     priceChart: null,
     volumeChart: null,
-    rsiChart: null,
-    macdChart: null,
-    currentTimeframe: '1d',
+    currentTimeframe: localStorage.getItem('pea_default_tf') || '1d',
     chartType: 'line',
     currentData: null,
     apiOnline: false,
@@ -22,16 +20,19 @@ const STATE = {
     countdownInterval: null,
     lastPrice: null,
     marketOpen: true,
-    searchTimeout: null
+    searchTimeout: null,
+    lastAiSignals: {}
 };
 
 /* =================== INIT =================== */
 document.addEventListener('DOMContentLoaded', async () => {
     setupNavigation();
     initCharts();
-    initSubCharts();
     setupControls();
     setupPortfolio();
+    // Set active TF button from saved preference
+    const savedTf = STATE.currentTimeframe;
+    document.querySelectorAll('.tf-btn').forEach(b => b.classList.toggle('active', b.getAttribute('data-tf') === savedTf));
     await bootApp();
     startAutoRefresh();
     checkMarketStatus();
@@ -106,7 +107,7 @@ function switchTab(tabId) {
 
     if (tabId === 'search') renderScreener(STATE.allAssets);
     if (tabId === 'favorites') renderFavorites();
-    if (tabId === 'alerts') { renderAlerts(); populateAlertSelect(); }
+    if (tabId === 'alerts') { renderAlerts(); populateAlertSelect(); renderAutoAlertLog(); loadAutoAlertToggle(); }
     if (tabId === 'opportunities') fetchOpportunities();
     if (tabId === 'settings') loadSettings();
 }
@@ -138,7 +139,7 @@ async function bootApp() {
 
 /* =================== AUTO-REFRESH =================== */
 function startAutoRefresh() {
-    const INTERVAL = 30; // seconds
+    const INTERVAL = parseInt(localStorage.getItem('pea_refresh_interval')) || 30;
     let remaining = INTERVAL;
     const countEl = document.getElementById('countdown-sec');
 
@@ -181,6 +182,22 @@ async function silentPriceRefresh() {
         // Check alerts
         checkAlerts(data);
     } catch (e) { /* silent */ }
+
+    // Also check other favorites for AI alerts (background)
+    scanFavoritesForAiAlerts();
+}
+
+async function scanFavoritesForAiAlerts() {
+    if (localStorage.getItem('pea_auto_alerts') === 'false') return;
+    for (const isin of STATE.favorites) {
+        if (isin === STATE.currentIsin) continue; // Already checked above
+        try {
+            const res = await fetch(`${API_URL}/asset/${isin}?period=1d`, { signal: AbortSignal.timeout(5000) });
+            if (!res.ok) continue;
+            const data = await res.json();
+            checkAiAutoAlert(data);
+        } catch (e) { /* silent */ }
+    }
 }
 
 function setApiStatus(online) {
@@ -219,7 +236,6 @@ async function loadAssetDetail(isin) {
     if (STATE.chartType !== 'line') switchChartType(STATE.chartType, data);
     updateAI(data);
     updateStats(data);
-    updateSubCharts(data);
     checkAlerts(data);
 }
 
@@ -479,109 +495,31 @@ function updateChart(data) {
     document.getElementById('stat-vol').textContent = data.volumeSeries ? formatVolume(data.volumeSeries.reduce((a,b) => a+b, 0)) : '--';
 }
 
-/* =================== RSI / MACD SUB-CHARTS =================== */
-function initSubCharts() {
-    const rsiEl = document.getElementById('rsiChart');
-    const macdEl = document.getElementById('macdChart');
-    if (!rsiEl || !macdEl) return;
-
-    const commonOpts = {
-        responsive: true, maintainAspectRatio: false,
-        animation: { duration: 300 },
-        plugins: { legend: { display: false }, tooltip: {
-            mode: 'index', intersect: false,
-            backgroundColor: 'rgba(13,20,32,0.95)',
-            borderColor: 'rgba(99,102,241,0.3)', borderWidth: 1,
-            bodyFont: { family: "'JetBrains Mono'", size: 11 },
-            bodyColor: '#f1f5f9', titleColor: '#94a3b8',
-        }},
-        scales: {
-            x: { display: false },
-            y: { position: 'right', grid: { color: 'rgba(71,85,105,0.1)' },
-                 ticks: { font: { size: 9, family: "'JetBrains Mono'" }, color: '#475569' } }
-        },
-        interaction: { mode: 'nearest', axis: 'x', intersect: false }
-    };
-
-    STATE.rsiChart = new Chart(rsiEl.getContext('2d'), {
-        type: 'line',
-        data: {
-            labels: [],
-            datasets: [{
-                label: 'RSI',
-                data: [],
-                borderColor: '#f59e0b',
-                borderWidth: 1.5,
-                pointRadius: 0,
-                fill: false,
-                tension: 0.3,
-                spanGaps: true
-            }]
-        },
-        options: {
-            ...commonOpts,
-            plugins: {
-                ...commonOpts.plugins,
-                annotation: {
-                    annotations: {
-                        overbought: { type: 'line', yMin: 70, yMax: 70, borderColor: 'rgba(239,68,68,0.4)', borderWidth: 1, borderDash: [3,3] },
-                        oversold: { type: 'line', yMin: 30, yMax: 30, borderColor: 'rgba(34,197,94,0.4)', borderWidth: 1, borderDash: [3,3] },
-                        mid: { type: 'line', yMin: 50, yMax: 50, borderColor: 'rgba(148,163,184,0.2)', borderWidth: 1, borderDash: [2,4] }
-                    }
-                },
-                tooltip: { ...commonOpts.plugins.tooltip, callbacks: { label: (ctx) => ` RSI: ${ctx.parsed.y?.toFixed(1)}` } }
-            },
-            scales: { ...commonOpts.scales, y: { ...commonOpts.scales.y, min: 0, max: 100 } }
-        }
-    });
-
-    STATE.macdChart = new Chart(macdEl.getContext('2d'), {
-        type: 'bar',
-        data: {
-            labels: [],
-            datasets: [
-                { label: 'Histogramme', data: [], backgroundColor: [], borderRadius: 1, order: 2 },
-                { label: 'MACD', type: 'line', data: [], borderColor: '#6366f1', borderWidth: 1.5, pointRadius: 0, fill: false, tension: 0.3, spanGaps: true, order: 1 },
-                { label: 'Signal', type: 'line', data: [], borderColor: '#ef4444', borderWidth: 1, borderDash: [3,3], pointRadius: 0, fill: false, tension: 0.3, spanGaps: true, order: 1 }
-            ]
-        },
-        options: {
-            ...commonOpts,
-            plugins: {
-                ...commonOpts.plugins,
-                annotation: { annotations: { zero: { type: 'line', yMin: 0, yMax: 0, borderColor: 'rgba(148,163,184,0.3)', borderWidth: 1 } } },
-                tooltip: { ...commonOpts.plugins.tooltip, callbacks: { label: (ctx) => ` ${ctx.dataset.label}: ${ctx.parsed.y?.toFixed(4)}` } }
-            }
-        }
-    });
-}
-
-function updateSubCharts(data) {
-    // RSI
-    if (STATE.rsiChart && data.rsiSeries) {
-        const rsiData = data.rsiSeries.map(v => (v != null && isFinite(v)) ? v : null);
-        STATE.rsiChart.data.labels = data.labels;
-        STATE.rsiChart.data.datasets[0].data = rsiData;
-        // Color based on last value
-        const lastRsi = rsiData.filter(v => v != null).pop() || 50;
-        STATE.rsiChart.data.datasets[0].borderColor = lastRsi > 70 ? '#ef4444' : lastRsi < 30 ? '#22c55e' : '#f59e0b';
-        STATE.rsiChart.update();
-    }
-    // MACD
-    if (STATE.macdChart && data.macdSeries) {
-        const macdHist = (data.macdHistSeries || []).map(v => (v != null && isFinite(v)) ? v : null);
-        const macdLine = (data.macdSeries || []).map(v => (v != null && isFinite(v)) ? v : null);
-        const macdSig = (data.macdSignalSeries || []).map(v => (v != null && isFinite(v)) ? v : null);
-        STATE.macdChart.data.labels = data.labels;
-        STATE.macdChart.data.datasets[0].data = macdHist;
-        STATE.macdChart.data.datasets[0].backgroundColor = macdHist.map(v => v >= 0 ? 'rgba(34,197,94,0.6)' : 'rgba(239,68,68,0.6)');
-        STATE.macdChart.data.datasets[1].data = macdLine;
-        STATE.macdChart.data.datasets[2].data = macdSig;
-        STATE.macdChart.update();
-    }
-}
-
 /* =================== CHART TYPE SWITCH =================== */
+function rescaleYAxis() {
+    const chart = STATE.priceChart;
+    if (!chart || !STATE.currentData) return;
+    const data = STATE.currentData;
+    const visiblePrices = [...data.dataseries];
+    const showVwap = document.getElementById('show-vwap')?.checked;
+    const showSma = document.getElementById('show-sma')?.checked;
+    const showBb = document.getElementById('show-bb')?.checked;
+    const cleanArr = (arr) => arr ? arr.filter(v => v != null && isFinite(v) && v > 0) : [];
+    if (showVwap && data.vwapSeries) visiblePrices.push(...cleanArr(data.vwapSeries));
+    if (showSma && data.sma20) visiblePrices.push(...cleanArr(data.sma20));
+    if (showSma && data.sma50) visiblePrices.push(...cleanArr(data.sma50));
+    if (showBb && data.bbUpper) visiblePrices.push(...cleanArr(data.bbUpper));
+    if (showBb && data.bbLower) visiblePrices.push(...cleanArr(data.bbLower));
+    const filtered = visiblePrices.filter(v => v != null && isFinite(v) && v > 0);
+    if (filtered.length > 0) {
+        const minP = Math.min(...filtered), maxP = Math.max(...filtered);
+        const range = maxP - minP || maxP * 0.02, pad = range * 0.15;
+        chart.options.scales.y.min = Math.floor((minP - pad) * 100) / 100;
+        chart.options.scales.y.max = Math.ceil((maxP + pad) * 100) / 100;
+    }
+    chart.update();
+}
+
 function switchChartType(type, data) {
     STATE.chartType = type;
     if (!data) data = STATE.currentData;
@@ -670,6 +608,7 @@ function switchChartType(type, data) {
         grad.addColorStop(0, `rgba(${isPositive ? '34,197,94' : '239,68,68'}, 0.45)`);
         grad.addColorStop(0.6, `rgba(${isPositive ? '34,197,94' : '239,68,68'}, 0.1)`);
         grad.addColorStop(1, `rgba(${isPositive ? '34,197,94' : '239,68,68'}, 0)`);
+        delete chart.data.datasets[0].type;
         chart.data.datasets[0].fill = true;
         chart.data.datasets[0].backgroundColor = grad;
         chart.data.datasets[0].borderColor = isPositive ? '#22c55e' : '#ef4444';
@@ -688,7 +627,7 @@ function switchChartType(type, data) {
         chart.data.datasets[0].tension = 0;
 
     } else { // line (default)
-        chart.data.datasets[0].type = 'line';
+        delete chart.data.datasets[0].type;
         if (isPositive) {
             grad.addColorStop(0, 'rgba(34,197,94,0.3)');
             grad.addColorStop(1, 'rgba(34,197,94,0)');
@@ -1037,16 +976,25 @@ function updatePortfolioDisplay(currentPrice) {
 function renderAlerts() {
     const list = document.getElementById('alert-list');
     list.innerHTML = '';
+    if (STATE.alerts.length === 0) {
+        list.innerHTML = '<p style="font-size:0.8rem;color:var(--text-3);text-align:center;padding:1rem;">Aucune alerte manuelle. Créez-en une ci-dessus.</p>';
+        return;
+    }
     STATE.alerts.forEach((alert, i) => {
         const div = document.createElement('div');
         div.className = `alert-item ${alert.triggered ? 'triggered' : ''}`;
+        const asset = STATE.allAssets.find(a => a.isin === alert.isin);
+        const assetName = asset ? asset.name : alert.isin;
+        let condText = '';
+        if (alert.type === 'above') condText = `Prix > ${alert.price} €`;
+        else if (alert.type === 'below') condText = `Prix < ${alert.price} €`;
+        else if (alert.type === 'change_up') condText = `Hausse > +${alert.price}%`;
+        else if (alert.type === 'change_down') condText = `Baisse > -${alert.price}%`;
         div.innerHTML = `
-            <div>
-                <strong>${alert.isin}</strong>
-                <span style="color:var(--text-2);margin-left:8px;font-size:0.8rem;">
-                    ${alert.type === 'above' ? '↑ Au-dessus de' : '↓ En-dessous de'} ${alert.price} €
-                </span>
-                ${alert.triggered ? '<span style="color:var(--amber);font-size:0.75rem;display:block;margin-top:2px;">⚡ Déclenchée</span>' : ''}
+            <div style="flex:1;">
+                <strong style="font-size:0.82rem;">${assetName}</strong>
+                <span style="color:var(--text-2);margin-left:8px;font-size:0.75rem;">${condText}</span>
+                ${alert.triggered ? '<span style="color:var(--amber);font-size:0.7rem;display:block;margin-top:2px;">⚡ Déclenchée</span>' : ''}
             </div>
             <button class="alert-del" data-idx="${i}">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -1094,19 +1042,98 @@ function populateAlertSelect() {
 }
 
 function checkAlerts(data) {
-
     let triggered = false;
     STATE.alerts.forEach(alert => {
         if (alert.isin !== data.isin || alert.triggered) return;
         if (alert.type === 'above' && data.price >= alert.price) { alert.triggered = true; triggered = true; }
         if (alert.type === 'below' && data.price <= alert.price) { alert.triggered = true; triggered = true; }
+        if (alert.type === 'change_up' && data.change >= alert.price) { alert.triggered = true; triggered = true; }
+        if (alert.type === 'change_down' && data.change <= -alert.price) { alert.triggered = true; triggered = true; }
     });
     if (triggered) {
         localStorage.setItem('pea_alerts', JSON.stringify(STATE.alerts));
-        if (Notification.permission === 'granted') {
-            new Notification(`⚡ Alerte PEA Déclenchée !`, { body: `${data.name} à ${data.price.toFixed(2)} €`, icon: './icon.png' });
+        sendNotification(`⚡ Alerte PEA Déclenchée !`, `${data.name} à ${data.price.toFixed(2)} €`);
+        showToast(`Alerte déclenchée : ${data.name} à ${data.price.toFixed(2)} €`, 'warn', 6000);
+    }
+
+    // AI Auto-detection: check if signal changed
+    checkAiAutoAlert(data);
+}
+
+function checkAiAutoAlert(data) {
+    const autoEnabled = document.getElementById('auto-alert-toggle')?.checked;
+    if (!autoEnabled) return;
+    if (!data.ai_status || !data.isin) return;
+
+    const prevSignal = STATE.lastAiSignals[data.isin];
+    STATE.lastAiSignals[data.isin] = data.ai_status;
+
+    // Only alert if signal changed and it's a strong signal
+    if (prevSignal && prevSignal !== data.ai_status) {
+        const isStrong = data.ai_status.includes('ACHETER') || data.ai_status.includes('VENDRE');
+        if (isStrong) {
+            const isBuy = data.ai_status.includes('ACHETER');
+            const msg = isBuy
+                ? `${data.name} : Signal ACHETER détecté (RSI: ${data.rsi?.toFixed(0) || '?'})`
+                : `${data.name} : Signal VENDRE détecté (RSI: ${data.rsi?.toFixed(0) || '?'})`;
+
+            sendNotification(`🤖 Signal IA · ${data.name}`, msg);
+            showToast(msg, isBuy ? 'success' : 'warn', 8000);
+            addAutoAlertLog(data, isBuy);
         }
     }
+}
+
+function addAutoAlertLog(data, isBuy) {
+    const log = JSON.parse(localStorage.getItem('pea_auto_alert_log') || '[]');
+    const now = new Date();
+    log.unshift({
+        isin: data.isin,
+        name: data.name,
+        signal: data.ai_status,
+        price: data.price,
+        rsi: data.rsi,
+        time: now.toISOString(),
+        type: isBuy ? 'buy' : 'sell'
+    });
+    // Keep last 20 entries
+    if (log.length > 20) log.length = 20;
+    localStorage.setItem('pea_auto_alert_log', JSON.stringify(log));
+    renderAutoAlertLog();
+}
+
+function renderAutoAlertLog() {
+    const container = document.getElementById('auto-alert-log');
+    if (!container) return;
+    const log = JSON.parse(localStorage.getItem('pea_auto_alert_log') || '[]');
+    if (log.length === 0) {
+        container.innerHTML = '<p style="font-size:0.75rem;color:var(--text-3);text-align:center;padding:0.5rem;">Aucune alerte IA détectée pour le moment.</p>';
+        return;
+    }
+    container.innerHTML = log.slice(0, 10).map(entry => {
+        const d = new Date(entry.time);
+        const timeStr = d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' }) + ' ' + d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+        return `<div class="auto-alert-entry ${entry.type}">
+            <span class="aal-icon">${entry.type === 'buy' ? '📈' : '📉'}</span>
+            <span class="aal-text"><strong>${entry.name}</strong> · ${entry.signal} · ${entry.price.toFixed(2)} € ${entry.rsi ? `(RSI ${entry.rsi.toFixed(0)})` : ''}</span>
+            <span class="aal-time">${timeStr}</span>
+        </div>`;
+    }).join('');
+}
+
+function sendNotification(title, body) {
+    if (localStorage.getItem('pea_notif_enabled') === 'false') return;
+    if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification(title, { body, icon: './icon.png' });
+    }
+}
+
+function loadAutoAlertToggle() {
+    const toggle = document.getElementById('auto-alert-toggle');
+    if (toggle) toggle.checked = localStorage.getItem('pea_auto_alerts') !== 'false';
+    toggle?.addEventListener('change', (e) => {
+        localStorage.setItem('pea_auto_alerts', e.target.checked ? 'true' : 'false');
+    });
 }
 
 /* =================== CONTROLS SETUP =================== */
@@ -1128,31 +1155,31 @@ function setupControls() {
 
     // VWAP toggle
     document.getElementById('show-vwap').addEventListener('change', () => {
-        if (STATE.priceChart) {
+        if (STATE.priceChart && STATE.priceChart.config.type !== 'candlestick') {
             STATE.priceChart.data.datasets[1].hidden = !document.getElementById('show-vwap').checked;
-            STATE.priceChart.update();
+            rescaleYAxis();
         }
     });
 
     // SMA toggle
     const smaToggle = document.getElementById('show-sma');
     if (smaToggle) smaToggle.addEventListener('change', () => {
-        if (STATE.priceChart) {
+        if (STATE.priceChart && STATE.priceChart.config.type !== 'candlestick') {
             const show = smaToggle.checked;
-            STATE.priceChart.data.datasets[2].hidden = !show; // SMA20
-            STATE.priceChart.data.datasets[3].hidden = !show; // SMA50
-            STATE.priceChart.update();
+            STATE.priceChart.data.datasets[2].hidden = !show;
+            STATE.priceChart.data.datasets[3].hidden = !show;
+            rescaleYAxis();
         }
     });
 
     // Bollinger toggle
     const bbToggle = document.getElementById('show-bb');
     if (bbToggle) bbToggle.addEventListener('change', () => {
-        if (STATE.priceChart) {
+        if (STATE.priceChart && STATE.priceChart.config.type !== 'candlestick') {
             const show = bbToggle.checked;
-            STATE.priceChart.data.datasets[4].hidden = !show; // BB Upper
-            STATE.priceChart.data.datasets[5].hidden = !show; // BB Lower
-            STATE.priceChart.update();
+            STATE.priceChart.data.datasets[4].hidden = !show;
+            STATE.priceChart.data.datasets[5].hidden = !show;
+            rescaleYAxis();
         }
     });
 
@@ -1227,28 +1254,80 @@ function setupControls() {
     document.getElementById('save-settings-btn').addEventListener('click', () => {
         const urlParams = document.getElementById('setting-backend-url').value.trim();
         localStorage.setItem('pea_backend_url', urlParams);
-        if ('serviceWorker' in navigator) navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.unregister()));
-        alert("Paramètres sauvegardés. L'application va redémarrer pour appliquer la nouvelle adresse IP.");
+        showToast('Paramètres sauvegardés. Rechargement...', 'success');
+        setTimeout(() => window.location.reload(), 1000);
+    });
+
+    // Clear cache
+    document.getElementById('btn-clear-cache')?.addEventListener('click', () => {
+        if ('caches' in window) caches.keys().then(k => k.forEach(c => caches.delete(c)));
+        showToast('Cache vidé avec succès', 'success');
+    });
+
+    // Reset app
+    document.getElementById('btn-reset-app')?.addEventListener('click', () => {
+        if (!confirm('Supprimer tous les favoris, alertes et paramètres ?')) return;
+        localStorage.clear();
+        if ('caches' in window) caches.keys().then(k => k.forEach(c => caches.delete(c)));
         window.location.reload();
+    });
+
+    // Notification toggle
+    document.getElementById('setting-notif-enabled')?.addEventListener('change', (e) => {
+        if (e.target.checked) {
+            if ('Notification' in window && Notification.permission !== 'granted') {
+                Notification.requestPermission().then(p => {
+                    if (p !== 'granted') { e.target.checked = false; showToast('Notifications refusées par le navigateur', 'warn'); }
+                    else { localStorage.setItem('pea_notif_enabled', 'true'); showToast('Notifications activées', 'success'); }
+                });
+            } else {
+                localStorage.setItem('pea_notif_enabled', 'true');
+            }
+        } else {
+            localStorage.setItem('pea_notif_enabled', 'false');
+        }
+    });
+
+    // Auto-alerts toggle
+    document.getElementById('setting-auto-alerts')?.addEventListener('change', (e) => {
+        localStorage.setItem('pea_auto_alerts', e.target.checked ? 'true' : 'false');
+        showToast(e.target.checked ? 'Alertes IA automatiques activées' : 'Alertes IA automatiques désactivées', 'info');
+    });
+
+    // Refresh interval
+    document.getElementById('setting-refresh-interval')?.addEventListener('change', (e) => {
+        localStorage.setItem('pea_refresh_interval', e.target.value);
+        showToast(`Refresh réglé à ${e.target.value}s`, 'info');
+    });
+
+    // Default timeframe
+    document.getElementById('setting-default-tf')?.addEventListener('change', (e) => {
+        localStorage.setItem('pea_default_tf', e.target.value);
     });
 }
 
 function loadSettings() {
-    const savedBackendUrl = localStorage.getItem('pea_backend_url') || '';
-    document.getElementById('setting-backend-url').value = savedBackendUrl;
+    document.getElementById('setting-backend-url').value = localStorage.getItem('pea_backend_url') || '';
+    const notifEl = document.getElementById('setting-notif-enabled');
+    if (notifEl) notifEl.checked = localStorage.getItem('pea_notif_enabled') === 'true' || ('Notification' in window && Notification.permission === 'granted');
+    const autoEl = document.getElementById('setting-auto-alerts');
+    if (autoEl) autoEl.checked = localStorage.getItem('pea_auto_alerts') !== 'false';
+    const refreshEl = document.getElementById('setting-refresh-interval');
+    if (refreshEl) refreshEl.value = localStorage.getItem('pea_refresh_interval') || '30';
+    const tfEl = document.getElementById('setting-default-tf');
+    if (tfEl) tfEl.value = localStorage.getItem('pea_default_tf') || '1d';
 }
 
 /* =================== NOTIFICATIONS =================== */
 function requestNotification(data) {
-    if (!('Notification' in window)) return alert('Notifications non supportées.');
+    if (!('Notification' in window)) return showToast('Notifications non supportées.', 'warn');
     if (Notification.permission === 'granted') {
-        new Notification(`PEA IA · ${data.name}`, {
-            body: `${data.price.toFixed(2)} € | Signal: ${data.ai_status}`,
-            icon: './icon.png'
-        });
+        sendNotification(`PEA IA · ${data.name}`, `${data.price.toFixed(2)} € | Signal: ${data.ai_status}`);
+        showToast('Notification envoyée', 'success');
     } else if (Notification.permission !== 'denied') {
         Notification.requestPermission().then(p => {
             if (p === 'granted') requestNotification(data);
+            else showToast('Notifications refusées', 'warn');
         });
     }
 }

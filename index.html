@@ -172,18 +172,6 @@
                     <canvas id="volumeChart"></canvas>
                 </div>
 
-                <!-- RSI Sub-Chart -->
-                <div class="subchart-wrapper">
-                    <div class="subchart-label">RSI (14)</div>
-                    <canvas id="rsiChart"></canvas>
-                </div>
-
-                <!-- MACD Sub-Chart -->
-                <div class="subchart-wrapper">
-                    <div class="subchart-label">MACD</div>
-                    <canvas id="macdChart"></canvas>
-                </div>
-
                 <!-- Stats Row -->
                 <div class="stats-row">
                     <div class="stat"><span class="stat-label">Ouv.</span><span class="stat-val" id="stat-open">--</span></div>
@@ -300,52 +288,166 @@
 
         <!-- ============== TAB: ALERTES ============== -->
         <section id="tab-alerts" class="tab">
-            <div class="page-header"><h1>Alertes Prix</h1></div>
-            <div class="alert-form glass">
-                <h3>Créer une Alerte</h3>
+            <div class="page-header"><h1>Alertes</h1></div>
+
+            <!-- Auto AI Alerts Section -->
+            <div class="settings-card glass">
+                <div class="settings-card-header">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
+                    <h3>Alertes IA Automatiques</h3>
+                </div>
+                <p class="settings-hint">L'IA surveille vos favoris et vous alerte automatiquement quand un signal ACHETER ou VENDRE est détecté.</p>
+                <div class="settings-row">
+                    <div class="settings-row-info">
+                        <span class="settings-row-label">Activer la détection automatique</span>
+                        <span class="settings-row-desc">Notification quand le signal IA change (ex: GARDER → VENDRE)</span>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="auto-alert-toggle" checked>
+                        <span class="switch-slider"></span>
+                    </label>
+                </div>
+                <div id="auto-alert-log" class="auto-alert-log"></div>
+            </div>
+
+            <!-- Manual Alerts Section -->
+            <div class="settings-card glass">
+                <div class="settings-card-header">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                    <h3>Alertes Prix Manuelles</h3>
+                </div>
                 <div class="form-row">
-                    <label>Actif (depuis vos Favoris)</label>
+                    <label>Actif</label>
                     <select id="alert-asset" class="alert-asset-select">
                         <option value="">— Choisir un actif —</option>
                     </select>
                 </div>
-                <div class="form-row">
-                    <label>Type</label>
-                    <select id="alert-type">
-                        <option value="above">Prix au-dessus de</option>
-                        <option value="below">Prix en-dessous de</option>
-                    </select>
-                </div>
-                <div class="form-row">
-                    <label>Prix cible (€)</label>
-                    <input type="number" id="alert-price" placeholder="Ex: 42.00" step="0.01">
+                <div class="alert-form-inline">
+                    <div class="form-row" style="flex:1;">
+                        <label>Condition</label>
+                        <select id="alert-type">
+                            <option value="above">Prix au-dessus de</option>
+                            <option value="below">Prix en-dessous de</option>
+                            <option value="change_up">Hausse de + de %</option>
+                            <option value="change_down">Baisse de + de %</option>
+                        </select>
+                    </div>
+                    <div class="form-row" style="flex:1;">
+                        <label>Valeur</label>
+                        <input type="number" id="alert-price" placeholder="Ex: 42.00" step="0.01">
+                    </div>
                 </div>
                 <button id="create-alert-btn" class="cta-btn">Créer l'alerte</button>
             </div>
+
+            <!-- Active Alerts List -->
             <div id="alert-list" class="alert-list"></div>
         </section>
 
-        <!-- ============== TAB: PARAMÈTRES (POUR APK) ============== -->
+        <!-- ============== TAB: PARAMÈTRES ============== -->
         <section id="tab-settings" class="tab">
             <div class="page-header"><h1>Paramètres</h1></div>
-            <div class="alert-form glass">
-                <h3>Serveur Backend (Mode Mobile/APK)</h3>
-                <p style="font-size:0.85rem;color:var(--text-2);margin-bottom:15px;">
-                    Si vous utilisez l'application en tant qu'APK ou sur votre Poco F7, vous devez indiquer l'adresse IP locale de votre PC (ex: 192.168.1.50) ou l'adresse du serveur public. Sans cela, l'application ne pourra pas contacter le backend Python.
-                </p>
-                <div class="form-row">
-                    <label>Adresse IP ou URL du Backend</label>
-                    <input type="text" id="setting-backend-url" placeholder="Ex: 192.168.1.50" value="">
+
+            <!-- Notifications -->
+            <div class="settings-card glass">
+                <div class="settings-card-header">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                    <h3>Notifications</h3>
                 </div>
-                <button id="save-settings-btn" class="cta-btn">Sauvegarder et Redémarrer</button>
+                <div class="settings-row">
+                    <div class="settings-row-info">
+                        <span class="settings-row-label">Notifications navigateur</span>
+                        <span class="settings-row-desc">Recevoir les alertes de prix et signaux IA</span>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="setting-notif-enabled">
+                        <span class="switch-slider"></span>
+                    </label>
+                </div>
+                <div class="settings-row">
+                    <div class="settings-row-info">
+                        <span class="settings-row-label">Alertes IA automatiques</span>
+                        <span class="settings-row-desc">Notification quand l'IA détecte un signal fort (Acheter/Vendre)</span>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="setting-auto-alerts" checked>
+                        <span class="switch-slider"></span>
+                    </label>
+                </div>
             </div>
-            
-            <div class="alert-form glass" style="margin-top:20px;">
-                <h3>Comment compiler en APK ?</h3>
-                <ol style="font-size:0.85rem;color:var(--text-2);line-height:1.6;margin-left:20px;margin-top:10px;">
-                    <li><strong>Méthode PWA Native (Recommandé) :</strong> Hébergez l'application sur internet (via GitHub Pages). Visitez le lien depuis Chrome sur votre Poco F7 et cliquez sur <em>"Ajouter à l'écran d'accueil"</em>. Elle s'installera comme une application native sans créer d'APK !</li>
-                    <li><strong>Méthode APK :</strong> Rendez-vous sur <strong>PWABuilder.com</strong>, entrez l'URL de votre application déployée. Le site va packager votre PWA et vous générera un fichier <code>.apk</code> à installer sur votre Android.</li>
-                </ol>
+
+            <!-- Affichage -->
+            <div class="settings-card glass">
+                <div class="settings-card-header">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                    <h3>Affichage</h3>
+                </div>
+                <div class="settings-row">
+                    <div class="settings-row-info">
+                        <span class="settings-row-label">Refresh automatique</span>
+                        <span class="settings-row-desc">Intervalle de rafraîchissement des données</span>
+                    </div>
+                    <select id="setting-refresh-interval" class="settings-select">
+                        <option value="15">15s</option>
+                        <option value="30" selected>30s</option>
+                        <option value="60">1 min</option>
+                        <option value="120">2 min</option>
+                    </select>
+                </div>
+                <div class="settings-row">
+                    <div class="settings-row-info">
+                        <span class="settings-row-label">Timeframe par défaut</span>
+                        <span class="settings-row-desc">Période affichée à l'ouverture</span>
+                    </div>
+                    <select id="setting-default-tf" class="settings-select">
+                        <option value="1d">1 Jour</option>
+                        <option value="5d">1 Semaine</option>
+                        <option value="1mo">1 Mois</option>
+                        <option value="6mo">6 Mois</option>
+                        <option value="1y">1 An</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Connexion -->
+            <div class="settings-card glass">
+                <div class="settings-card-header">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                    <h3>Connexion Backend</h3>
+                </div>
+                <p class="settings-hint">Pour l'utilisation en APK/mobile, indiquez l'adresse du serveur.</p>
+                <div class="form-row">
+                    <label>URL du Backend</label>
+                    <input type="text" id="setting-backend-url" placeholder="Ex: 192.168.1.50 ou laisser vide pour auto">
+                </div>
+                <button id="save-settings-btn" class="cta-btn">Sauvegarder</button>
+            </div>
+
+            <!-- Données -->
+            <div class="settings-card glass">
+                <div class="settings-card-header">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+                    <h3>Données</h3>
+                </div>
+                <div class="settings-row">
+                    <div class="settings-row-info">
+                        <span class="settings-row-label">Vider le cache</span>
+                        <span class="settings-row-desc">Forcer le rechargement de toutes les données</span>
+                    </div>
+                    <button class="settings-action-btn" id="btn-clear-cache">Vider</button>
+                </div>
+                <div class="settings-row">
+                    <div class="settings-row-info">
+                        <span class="settings-row-label">Réinitialiser l'application</span>
+                        <span class="settings-row-desc">Supprimer favoris, alertes et paramètres</span>
+                    </div>
+                    <button class="settings-action-btn danger" id="btn-reset-app">Reset</button>
+                </div>
+            </div>
+
+            <!-- Version -->
+            <div class="settings-version">
+                PEA Tracker IA · v3.1 · Données Yahoo Finance
             </div>
         </section>
     </main>
