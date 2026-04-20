@@ -153,10 +153,11 @@ function startAutoRefresh() {
     }, 1000);
 }
 
-async function silentPriceRefresh() {
+async function silentPriceRefresh(force = false) {
     if (!STATE.apiOnline) return;
     try {
-        const res = await fetch(`${API_URL}/asset/${STATE.currentIsin}?period=${STATE.currentTimeframe}`, { signal: AbortSignal.timeout(8000) });
+        const url = `${API_URL}/asset/${STATE.currentIsin}?period=${STATE.currentTimeframe}${force ? '&force=true' : ''}`;
+        const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
         if (!res.ok) return;
         const data = await res.json();
 
@@ -786,13 +787,14 @@ function toggleFavorite(isin) {
 }
 
 /* =================== OPPORTUNITIES =================== */
-async function fetchOpportunities() {
+async function fetchOpportunities(force = false) {
     if (!STATE.apiOnline) {
         renderOpportunities(getMockOpportunities());
         return;
     }
     try {
-        const res = await fetch(`${API_URL}/opportunities`, { signal: AbortSignal.timeout(30000) });
+        const url = `${API_URL}/opportunities${force ? '?force=true' : ''}`;
+        const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
         if (!res.ok) throw new Error('API error');
         const data = await res.json();
         renderOpportunities(data);
@@ -1138,6 +1140,15 @@ function loadAutoAlertToggle() {
 
 /* =================== CONTROLS SETUP =================== */
 function setupControls() {
+    // Top header manual refresh
+    document.getElementById('force-refresh-btn')?.addEventListener('click', async () => {
+        const btn = document.getElementById('force-refresh-btn');
+        btn.classList.add('spinning');
+        await silentPriceRefresh(true);
+        setTimeout(() => btn.classList.remove('spinning'), 500);
+        showToast('Actualisé en direct', 'info', 2000);
+    });
+
     // Timeframe buttons
     document.querySelectorAll('.tf-btn').forEach(btn => {
         btn.addEventListener('click', async () => {
@@ -1222,7 +1233,7 @@ function setupControls() {
         const btn = document.getElementById('refresh-scan');
         btn.classList.add('spinning');
         try {
-            const res = await fetch(`${API_URL}/scan`);
+            const res = await fetch(`${API_URL}/scan?force=true`);
             if (res.ok) { STATE.allAssets = await res.json(); renderScreener(STATE.allAssets); }
         } catch(e) { console.warn(e); }
         setTimeout(() => btn.classList.remove('spinning'), 1000);
@@ -1233,7 +1244,7 @@ function setupControls() {
     if (refreshOppBtn) {
         refreshOppBtn.addEventListener('click', async () => {
             refreshOppBtn.classList.add('spinning');
-            await fetchOpportunities();
+            await fetchOpportunities(true);
             setTimeout(() => refreshOppBtn.classList.remove('spinning'), 1000);
         });
     }

@@ -152,16 +152,17 @@ def compute_ai_signals(df_intraday, df_long, current_price):
 
 # ================= ASSET ENDPOINT ================= #
 @app.get("/api/asset/{isin}")
-def get_asset_data(isin: str, period: str = "1d"):
+def get_asset_data(isin: str, period: str = "1d", force: bool = False):
     if isin not in ASSET_MAPPING:
         raise HTTPException(status_code=404, detail="Asset not found")
     if period not in TIMEFRAME_MAP:
         period = "1d"
 
     cache_key = f"asset:{isin}:{period}"
-    cached = cache_get(cache_key)
-    if cached:
-        return cached
+    if not force:
+        cached = cache_get(cache_key)
+        if cached:
+            return cached
 
     try:
         result = _build_asset_data(isin, period)
@@ -267,9 +268,10 @@ def _build_asset_data(isin: str, period: str):
 
 # ================= SCAN ================= #
 @app.get("/api/scan")
-def scan_assets():
-    cached = cache_get("scan:all")
-    if cached: return cached
+def scan_assets(force: bool = False):
+    if not force:
+        cached = cache_get("scan:all")
+        if cached: return cached
 
     tickers = [v[1] for v in ASSET_MAPPING.values()]
     isin_by_ticker = {v[1]: k for k, v in ASSET_MAPPING.items()}
@@ -314,9 +316,10 @@ def scan_assets():
 
 # ================= OPPORTUNITIES ================= #
 @app.get("/api/opportunities")
-def get_opportunities():
-    cached = cache_get("opportunities:all")
-    if cached: return cached
+def get_opportunities(force: bool = False):
+    if not force:
+        cached = cache_get("opportunities:all")
+        if cached: return cached
 
     results = []
     for isin, (name, ticker) in ASSET_MAPPING.items():
