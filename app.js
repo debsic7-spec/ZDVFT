@@ -339,7 +339,30 @@ async function loadAssetDetail(isin) {
         } catch (e) {
             console.warn('Asset API error:', e);
             showToast(`Erreur chargement données: ${e.message}`, 'error');
-            data = getMockDetail(isin);
+            // Do not fallback to random mock data when API is online: keep previous data if available,
+            // otherwise use a safe placeholder (no random numbers).
+            if (STATE.currentData && STATE.currentData.isin === isin) {
+                data = STATE.currentData;
+            } else {
+                data = {
+                    isin,
+                    name: '--',
+                    ticker: '',
+                    price: null,
+                    change: null,
+                    period: STATE.currentTimeframe,
+                    labels: [],
+                    dataseries: [],
+                    vwapSeries: [],
+                    volumeSeries: [],
+                    sma20: [],
+                    sma50: [],
+                    bbUpper: [],
+                    bbLower: [],
+                    dayOpen: null, dayHigh: null, dayLow: null,
+                    interval_minutes: STATE.currentTimeframe === '1d' ? 5 : 60
+                };
+            }
         }
     } else {
         data = getMockDetail(isin);
@@ -356,22 +379,31 @@ async function loadAssetDetail(isin) {
 }
 
 function updateHeader(data) {
-    document.getElementById('asset-name').textContent = data.name;
+    document.getElementById('asset-name').textContent = data.name || '--';
     document.getElementById('asset-isin').textContent = `${data.isin} · ${data.ticker || ''}`;
 
     const priceEl = document.getElementById('current-price');
-    if (STATE.lastPrice !== null && data.price !== STATE.lastPrice) {
+    if (typeof data.price === 'number' && STATE.lastPrice !== null && data.price !== STATE.lastPrice) {
         priceEl.classList.remove('price-updated');
         void priceEl.offsetWidth;
         priceEl.classList.add('price-updated');
     }
-    STATE.lastPrice = data.price;
-    priceEl.textContent = `${data.price.toFixed(2)} €`;
-    
+    if (typeof data.price === 'number') {
+        STATE.lastPrice = data.price;
+        priceEl.textContent = `${data.price.toFixed(2)} €`;
+    } else {
+        priceEl.textContent = '--';
+    }
+
     const changeBadge = document.getElementById('current-change');
-    const sign = data.change >= 0 ? '+' : '';
-    changeBadge.textContent = `${sign}${data.change.toFixed(2)}%`;
-    changeBadge.className = `change-badge ${data.change >= 0 ? 'positive' : 'negative'}`;
+    if (typeof data.change === 'number') {
+        const sign = data.change >= 0 ? '+' : '';
+        changeBadge.textContent = `${sign}${data.change.toFixed(2)}%`;
+        changeBadge.className = `change-badge ${data.change >= 0 ? 'positive' : 'negative'}`;
+    } else {
+        changeBadge.textContent = '--';
+        changeBadge.className = `change-badge`;
+    }
 
     // Fav button
     const favBtn = document.getElementById('fav-toggle-btn');
