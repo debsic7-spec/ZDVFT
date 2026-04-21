@@ -425,6 +425,32 @@ def subscribe(sub: PushSubscription):
             json.dump(subs, f)
     return {"status": "ok"}
 
+
+@app.get("/api/vapid_public")
+def vapid_public():
+    """Return VAPID public key (base64 urlsafe) derived from configured private key."""
+    try:
+        import base64
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.backends import default_backend
+
+        pk_b64 = VAPID_PRIVATE_KEY
+        # add padding
+        pk_b64_padded = pk_b64 + ("=" * (-len(pk_b64) % 4))
+        priv_bytes = base64.urlsafe_b64decode(pk_b64_padded)
+        priv_int = int.from_bytes(priv_bytes, "big")
+        priv_key = ec.derive_private_key(priv_int, ec.SECP256R1(), default_backend())
+        pub = priv_key.public_key()
+        nums = pub.public_numbers()
+        x = nums.x.to_bytes(32, "big")
+        y = nums.y.to_bytes(32, "big")
+        uncompressed = b"\x04" + x + y
+        pub_b64 = base64.urlsafe_b64encode(uncompressed).rstrip(b"=").decode("ascii")
+        return {"vapid_public": pub_b64}
+    except Exception as e:
+        print("VAPID public key generation failed:", e)
+        return {"vapid_public": ""}
+
 @app.post("/api/alert/sync")
 def sync_alerts(alerts: List[Dict]):
     with open("alerts.json", "w") as f:

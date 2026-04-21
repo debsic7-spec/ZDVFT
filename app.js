@@ -36,16 +36,115 @@ document.addEventListener('DOMContentLoaded', async () => {
     await bootApp();
     startAutoRefresh();
     checkMarketStatus();
-    // Force clear old service workers and caches on load
+    // Register service worker for offline + push support
     if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.getRegistrations().then(regs => {
-            regs.forEach(r => r.unregister());
-        });
-        caches.keys().then(keys => {
-            keys.forEach(k => caches.delete(k));
-        });
+        try {
+            navigator.serviceWorker.register('/sw.js').then(reg => {
+                console.log('ServiceWorker registered', reg);
+            }).catch(err => console.warn('SW register failed', err));
+        } catch (e) { console.warn('SW register error', e); }
     }
 });
+
+/* =================== PUSH SUBSCRIPTION HELPERS =================== */
+function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) {
+        outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
+}
+
+/* =================== FORECAST TAB & CHART =================== */
+function initForecastChart() {
+    if (STATE.forecastChart) return;
+    const ctx = document.getElementById('forecastChart').getContext('2d');
+    STATE.forecastChart = new Chart(ctx, {
+        type: 'line',
+        data: { labels: [], datasets: [
+            { label: 'Historique', data: [], borderColor: '#6366f1', backgroundColor: 'rgba(99,102,241,0.08)', fill: true, pointRadius: 0 },
+            { label: 'Prévision', data: [], borderColor: '#94a3b8', borderDash: [6,4], pointRadius: 0, fill: false }
+        ]},
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true } }, scales: { x: { grid: { color: 'rgba(71,85,105,0.08)' } }, y: { position: 'right' } } }
+    });
+}
+
+function renderForecastTab() {
+    initForecastChart();
+    const chart = STATE.forecastChart;
+    let data = STATE.currentData;
+    if (!data) { loadAssetDetail(STATE.currentIsin); data = STATE.currentData; }
+    if (!data) return;
+
+    const method = document.getElementById('forecast-method')?.value || 'linear';
+    const horizonHours = parseInt(document.getElementById('forecast-horizon')?.value || '24', 10);
+    const intervalMin = data.interval_minutes || (STATE.currentTimeframe === '1d' ? 5 : 60);
+    const maxFuturePoints = Math.min(96, Math.max(1, Math.round((horizonHours * 60) / Math.max(1, intervalMin))));
+
+    // Use last N historical points
+    const histN = Math.min(60, data.dataseries.length);
+    const hist = data.dataseries.slice(-histN).map(v => Number(v));
+    const labels = data.labels.slice(-histN).slice();
+
+    // Simple forecasting methods
+    let forecast = [];
+    if (method === 'linear') {
+        const N = hist.length;
+        let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+        for (let i = 0; i < N; i++) { const xi = i; const yi = hist[i]; sumX += xi; sumY += yi; sumXY += xi*yi; sumXX += xi*xi; }
+        const denom = (N * sumXX - sumX * sumX) || 1;
+        const slope = (N * sumXY - sumX * sumY) / denom;
+        const intercept = (sumY - slope * sumX) / N;
+        for (let k = 1; k <= maxFuturePoints; k++) {
+            const xk = N - 1 + k; forecast.push(Number((intercept + slope * xk).toFixed(4)));
+        }
+    } else if (method === 'ema') {
+        // simple EMA extrapolation: compute EMA and project
+        const alpha = 2 / (Math.min(20, hist.length) + 1);
+        let ema = hist[0];
+        for (let i = 1; i < hist.length; i++) ema = alpha * hist[i] + (1 - alpha) * ema;
+        for (let k = 1; k <= maxFuturePoints; k++) { ema = alpha * ema + (1 - alpha) * ema; forecast.push(Number(ema.toFixed(4))); }
+    }
+
+    // Future labels
+    const futureLabels = [];
+    for (let k = 1; k <= maxFuturePoints; k++) {
+        const mins = intervalMin * k;
+        futureLabels.push(mins >= 60 ? `+${Math.round(mins/60)}h` : `+${mins}m`);
+    }
+
+    chart.data.labels = labels.concat(futureLabels);
+    chart.data.datasets[0].data = hist.concat(new Array(maxFuturePoints).fill(null));
+    chart.data.datasets[1].data = new Array(hist.length).fill(null).concat(forecast);
+    chart.update();
+}
+
+async function registerServiceWorkerAndSubscribe() {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+        showToast('Notifications push non supportées par ce navigateur', 'warn');
+        return;
+    }
+    try {
+        const reg = await navigator.serviceWorker.register('/sw.js');
+        const r = await fetch(`${API_URL}/vapid_public`);
+        const j = await r.json();
+        const publicKey = j.vapid_public;
+        if (!publicKey) throw new Error('VAPID public key missing');
+        const sub = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(publicKey)
+        });
+        await fetch(`${API_URL}/subscribe`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(sub) });
+        localStorage.setItem('pea_push_subscribed', 'true');
+        showToast('Abonnement push activé', 'success');
+    } catch (e) {
+        console.warn('Push subscribe failed', e);
+        showToast('Impossible d\'activer notifications push: ' + (e.message || e), 'error');
+    }
+}
 
 /* =================== TOAST NOTIFICATIONS =================== */
 function showToast(message, type = 'error', duration = 4000) {
@@ -109,6 +208,7 @@ function switchTab(tabId) {
     if (tabId === 'favorites') renderFavorites();
     if (tabId === 'alerts') { renderAlerts(); populateAlertSelect(); renderAutoAlertLog(); loadAutoAlertToggle(); }
     if (tabId === 'opportunities') fetchOpportunities();
+    if (tabId === 'forecast') renderForecastTab();
     if (tabId === 'settings') loadSettings();
 }
 
@@ -1308,6 +1408,15 @@ function setupControls() {
         });
     }
 
+    // Forecast controls
+    document.getElementById('refresh-forecast')?.addEventListener('click', () => {
+        const b = document.getElementById('refresh-forecast'); b.classList.add('spinning');
+        renderForecastTab();
+        setTimeout(() => b.classList.remove('spinning'), 600);
+    });
+    document.getElementById('forecast-horizon')?.addEventListener('change', () => renderForecastTab());
+    document.getElementById('forecast-method')?.addEventListener('change', () => renderForecastTab());
+
     // Alert form
     document.getElementById('create-alert-btn').addEventListener('click', () => {
         const isin = document.getElementById('alert-asset').value.trim();
@@ -1347,11 +1456,18 @@ function setupControls() {
         if (e.target.checked) {
             if ('Notification' in window && Notification.permission !== 'granted') {
                 Notification.requestPermission().then(p => {
-                    if (p !== 'granted') { e.target.checked = false; showToast('Notifications refusées par le navigateur', 'warn'); }
-                    else { localStorage.setItem('pea_notif_enabled', 'true'); showToast('Notifications activées', 'success'); }
+                    if (p !== 'granted') {
+                        e.target.checked = false; showToast('Notifications refusées par le navigateur', 'warn');
+                    } else {
+                        localStorage.setItem('pea_notif_enabled', 'true');
+                        showToast('Notifications activées', 'success');
+                        // Subscribe to push so notifications arrive when app closed
+                        registerServiceWorkerAndSubscribe();
+                    }
                 });
             } else {
                 localStorage.setItem('pea_notif_enabled', 'true');
+                registerServiceWorkerAndSubscribe();
             }
         } else {
             localStorage.setItem('pea_notif_enabled', 'false');
