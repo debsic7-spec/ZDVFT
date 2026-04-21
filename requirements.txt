@@ -5,3 +5,4 @@ pandas>=2.2.2
 ta>=0.11.0
 requests>=2.32.0
 pywebpush>=2.0.0
+statsmodels>=0.14.0

@@ -72,7 +72,7 @@ function initForecastChart() {
     });
 }
 
-function renderForecastTab() {
+async function renderForecastTab() {
     initForecastChart();
     const chart = STATE.forecastChart;
     let data = STATE.currentData;
@@ -89,9 +89,32 @@ function renderForecastTab() {
     const hist = data.dataseries.slice(-histN).map(v => Number(v));
     const labels = data.labels.slice(-histN).slice();
 
-    // Simple forecasting methods
+    // Forecast: prefer server-side ARIMA when selected, else client methods
     let forecast = [];
-    if (method === 'linear') {
+    if (method === 'server_arima') {
+        try {
+            const resp = await fetch(`${API_URL}/forecast?isin=${STATE.currentIsin}&period=${STATE.currentTimeframe}&horizon_hours=${horizonHours}&method=arima`);
+            if (resp.ok) {
+                const jf = await resp.json();
+                // server returns labels, historical, forecast
+                const serverHist = jf.historical || [];
+                const serverForecast = jf.forecast || [];
+                const lbls = jf.labels || [];
+                // Use server-supplied series if present
+                chart.data.labels = lbls;
+                chart.data.datasets[0].data = serverHist.concat(new Array(serverForecast.length).fill(null));
+                chart.data.datasets[1].data = new Array(serverHist.length).fill(null).concat(serverForecast);
+                chart.update();
+                return;
+            }
+        } catch (e) {
+            console.warn('Server forecast failed, falling back to client method', e);
+        }
+        // fallback to client-side methods below
+    }
+
+    // Simple client-side forecasting methods (linear, ema)
+    if (method === 'linear' || method === 'server_arima') {
         const N = hist.length;
         let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
         for (let i = 0; i < N; i++) { const xi = i; const yi = hist[i]; sumX += xi; sumY += yi; sumXY += xi*yi; sumXX += xi*xi; }
@@ -102,7 +125,6 @@ function renderForecastTab() {
             const xk = N - 1 + k; forecast.push(Number((intercept + slope * xk).toFixed(4)));
         }
     } else if (method === 'ema') {
-        // simple EMA extrapolation: compute EMA and project
         const alpha = 2 / (Math.min(20, hist.length) + 1);
         let ema = hist[0];
         for (let i = 1; i < hist.length; i++) ema = alpha * hist[i] + (1 - alpha) * ema;

@@ -16,6 +16,9 @@ import math
 import time
 from pathlib import Path
 from collections import defaultdict
+from typing import Tuple
+import statsmodels.api as sm
+from statsmodels.tsa.arima.model import ARIMA
 
 app = FastAPI(title="PEA Screener Tracker AI v3")
 
@@ -64,6 +67,19 @@ def cache_get(key: str):
 
 def cache_set(key: str, data, ttl: int):
     _cache[key] = {'data': data, 'ts': time.time(), 'ttl': ttl}
+
+
+def _compute_interval_minutes(yf_interval: str) -> int:
+    try:
+        if yf_interval.endswith('m'):
+            return int(yf_interval[:-1])
+        if yf_interval.endswith('h'):
+            return int(yf_interval[:-1]) * 60
+        if yf_interval.endswith('d'):
+            return 1440
+    except Exception:
+        pass
+    return 0
 
 # ================= RATE LIMITING ================= #
 _rate_limits: Dict[str, list] = defaultdict(list)
@@ -388,6 +404,88 @@ def get_opportunities(force: bool = False):
     results.sort(key=lambda x: x['score'], reverse=True)
     cache_set("opportunities:all", results, 300)
     return results
+
+
+@app.get("/api/forecast")
+def get_forecast(isin: str, period: str = "1d", horizon_hours: int = 1, method: str = "arima"):
+    """Return short-term forecast points for an asset.
+
+    method: 'arima' (server-side ARIMA) or 'linear' (fallback linear extrapolation)
+    """
+    if isin not in ASSET_MAPPING:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    if period not in TIMEFRAME_MAP:
+        period = '1d'
+
+    name, ticker = ASSET_MAPPING[isin]
+    yf_period, yf_interval, label_fmt = TIMEFRAME_MAP[period]
+
+    try:
+        df_tf = fix_columns(yf.Ticker(ticker).history(period=yf_period, interval=yf_interval))
+        if period == '1d' and not df_tf.empty:
+            last_day = df_tf.index[-1].date()
+            df_tf = df_tf[df_tf.index.date == last_day].copy()
+    except Exception as e:
+        df_tf = pd.DataFrame()
+
+    # fallback to daily tail if no intraday
+    if df_tf.empty or len(df_tf) < 5:
+        df_long = fix_columns(yf.Ticker(ticker).history(period="3mo", interval="1d"))
+        series = df_long['Close'].dropna().tail(60)
+        base_labels = [idx.strftime('%d/%m') for idx in series.index]
+        interval_minutes = 1440
+    else:
+        series = df_tf['Close'].dropna()
+        base_labels = [idx.strftime(label_fmt) for idx in df_tf.index]
+        interval_minutes = _compute_interval_minutes(yf_interval)
+
+    hist = [clean(v) for v in series.tolist()]
+    future_points = max(1, round(horizon_hours * 60 / max(1, interval_minutes))) if interval_minutes > 0 else max(1, horizon_hours)
+
+    forecast_vals = []
+    used_method = method
+    try:
+        if method == 'arima' and len(series) >= 10:
+            # Fit a simple ARIMA(1,1,1)
+            model = ARIMA(series.astype(float), order=(1, 1, 1))
+            fitted = model.fit()
+            pred = fitted.get_forecast(steps=future_points)
+            forecast_vals = [round(float(x), 4) for x in pred.predicted_mean.tolist()]
+        else:
+            # fallback: linear regression on last N points
+            y = series.values.astype(float)
+            N = min(40, len(y))
+            y = y[-N:]
+            xs = np.arange(len(y))
+            A = np.vstack([xs, np.ones(len(xs))]).T
+            m, c = np.linalg.lstsq(A, y, rcond=None)[0]
+            forecast_vals = [round(float(m * (len(xs) + k) + c), 4) for k in range(1, future_points + 1)]
+            used_method = 'linear'
+    except Exception as e:
+        # if ARIMA fails, fallback to linear
+        y = series.values.astype(float)
+        N = min(40, len(y))
+        y = y[-N:]
+        xs = np.arange(len(y))
+        A = np.vstack([xs, np.ones(len(xs))]).T
+        m, c = np.linalg.lstsq(A, y, rcond=None)[0]
+        forecast_vals = [round(float(m * (len(xs) + k) + c), 4) for k in range(1, future_points + 1)]
+        used_method = 'linear'
+
+    future_labels = []
+    for k in range(1, future_points + 1):
+        mins = interval_minutes * k if interval_minutes > 0 else k * 60
+        future_labels.append(f'+{round(mins/60,2)}h' if mins >= 60 else f'+{mins}m')
+
+    return {
+        'isin': isin,
+        'name': name,
+        'method': used_method,
+        'interval_minutes': interval_minutes,
+        'labels': base_labels[-len(hist):] + future_labels,
+        'historical': hist[-len(hist):],
+        'forecast': forecast_vals
+    }
 
 
 # ================= HEALTH + MARKET STATUS ================= #
