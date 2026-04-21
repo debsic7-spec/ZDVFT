@@ -6,3 +6,5 @@ ta>=0.11.0
 requests>=2.32.0
 pywebpush>=2.0.0
 statsmodels>=0.14.0
+pmdarima>=2.2.0
+scikit-learn>=1.3.0

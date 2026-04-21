@@ -19,6 +19,15 @@ from collections import defaultdict
 from typing import Tuple
 import statsmodels.api as sm
 from statsmodels.tsa.arima.model import ARIMA
+# optional advanced forecasting libraries
+try:
+    import pmdarima as pm
+except Exception:
+    pm = None
+try:
+    from sklearn.ensemble import GradientBoostingRegressor
+except Exception:
+    GradientBoostingRegressor = None
 
 app = FastAPI(title="PEA Screener Tracker AI v3")
 
@@ -410,7 +419,8 @@ def get_opportunities(force: bool = False):
 def get_forecast(isin: str, period: str = "1d", horizon_hours: int = 1, method: str = "arima"):
     """Return short-term forecast points for an asset.
 
-    method: 'arima' (server-side ARIMA) or 'linear' (fallback linear extrapolation)
+    method: 'arima' (ARIMA), 'auto_arima' (pmdarima auto_arima),
+            'ml' (server-side ML regressor) or 'linear' (fallback linear extrapolation)
     """
     if isin not in ASSET_MAPPING:
         raise HTTPException(status_code=404, detail="Asset not found")
@@ -444,32 +454,61 @@ def get_forecast(isin: str, period: str = "1d", horizon_hours: int = 1, method: 
 
     forecast_vals = []
     used_method = method
-    try:
-        if method == 'arima' and len(series) >= 10:
-            # Fit a simple ARIMA(1,1,1)
-            model = ARIMA(series.astype(float), order=(1, 1, 1))
-            fitted = model.fit()
-            pred = fitted.get_forecast(steps=future_points)
-            forecast_vals = [round(float(x), 4) for x in pred.predicted_mean.tolist()]
-        else:
-            # fallback: linear regression on last N points
-            y = series.values.astype(float)
-            N = min(40, len(y))
-            y = y[-N:]
-            xs = np.arange(len(y))
-            A = np.vstack([xs, np.ones(len(xs))]).T
-            m, c = np.linalg.lstsq(A, y, rcond=None)[0]
-            forecast_vals = [round(float(m * (len(xs) + k) + c), 4) for k in range(1, future_points + 1)]
-            used_method = 'linear'
-    except Exception as e:
-        # if ARIMA fails, fallback to linear
-        y = series.values.astype(float)
+
+    # Helper: linear fallback
+    def linear_forecast(arr, steps):
+        y = np.array(arr, dtype=float)
         N = min(40, len(y))
         y = y[-N:]
         xs = np.arange(len(y))
         A = np.vstack([xs, np.ones(len(xs))]).T
         m, c = np.linalg.lstsq(A, y, rcond=None)[0]
-        forecast_vals = [round(float(m * (len(xs) + k) + c), 4) for k in range(1, future_points + 1)]
+        return [round(float(m * (len(xs) + k) + c), 4) for k in range(1, steps + 1)]
+
+    try:
+        s = series.dropna().astype(float)
+        if method == 'arima' and len(s) >= 10:
+            # ARIMA(1,1,1)
+            model = ARIMA(s, order=(1, 1, 1))
+            fitted = model.fit()
+            pred = fitted.get_forecast(steps=future_points)
+            forecast_vals = [round(float(x), 4) for x in pred.predicted_mean.tolist()]
+        elif method == 'auto_arima' and pm is not None and len(s) >= 10:
+            # use pmdarima.auto_arima
+            try:
+                am = pm.auto_arima(s, seasonal=False, stepwise=True, error_action='ignore', suppress_warnings=True, max_p=5, max_q=5, max_d=2)
+                preds = am.predict(n_periods=future_points)
+                forecast_vals = [round(float(x), 4) for x in preds.tolist()]
+            except Exception:
+                forecast_vals = linear_forecast(s.tolist(), future_points)
+                used_method = 'linear'
+        elif method == 'ml' and GradientBoostingRegressor is not None and len(s) >= 10:
+            # train a simple gradient boosting regressor on lag features (iterative forecast)
+            y = s.tolist()
+            L = min(20, max(3, len(y) - 1))
+            if L < 3:
+                forecast_vals = linear_forecast(y, future_points)
+                used_method = 'linear'
+            else:
+                X, Y = [], []
+                for i in range(L, len(y)):
+                    X.append(y[i-L:i])
+                    Y.append(y[i])
+                model = GradientBoostingRegressor(n_estimators=100, max_depth=3, random_state=0)
+                model.fit(X, Y)
+                last = y[-L:]
+                preds = []
+                for k in range(future_points):
+                    p = float(model.predict([last])[0])
+                    preds.append(round(p, 4))
+                    last = last[1:] + [p]
+                forecast_vals = preds
+        else:
+            # fallback: linear regression on recent points
+            forecast_vals = linear_forecast(series.tolist(), future_points)
+            used_method = 'linear'
+    except Exception:
+        forecast_vals = linear_forecast(series.tolist(), future_points)
         used_method = 'linear'
 
     future_labels = []

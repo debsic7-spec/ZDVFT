@@ -89,18 +89,17 @@ async function renderForecastTab() {
     const hist = data.dataseries.slice(-histN).map(v => Number(v));
     const labels = data.labels.slice(-histN).slice();
 
-    // Forecast: prefer server-side ARIMA when selected, else client methods
+    // Forecast: prefer server-side when selected, else client methods
     let forecast = [];
-    if (method === 'server_arima') {
+    if (method && method.startsWith('server_')) {
+        const serverMethod = method.replace('server_', '');
         try {
-            const resp = await fetch(`${API_URL}/forecast?isin=${STATE.currentIsin}&period=${STATE.currentTimeframe}&horizon_hours=${horizonHours}&method=arima`);
+            const resp = await fetch(`${API_URL}/forecast?isin=${STATE.currentIsin}&period=${STATE.currentTimeframe}&horizon_hours=${horizonHours}&method=${serverMethod}`);
             if (resp.ok) {
                 const jf = await resp.json();
-                // server returns labels, historical, forecast
                 const serverHist = jf.historical || [];
                 const serverForecast = jf.forecast || [];
                 const lbls = jf.labels || [];
-                // Use server-supplied series if present
                 chart.data.labels = lbls;
                 chart.data.datasets[0].data = serverHist.concat(new Array(serverForecast.length).fill(null));
                 chart.data.datasets[1].data = new Array(serverHist.length).fill(null).concat(serverForecast);
@@ -114,7 +113,7 @@ async function renderForecastTab() {
     }
 
     // Simple client-side forecasting methods (linear, ema)
-    if (method === 'linear' || method === 'server_arima') {
+    if (method === 'linear' || (method && method.startsWith('server_'))) {
         const N = hist.length;
         let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
         for (let i = 0; i < N; i++) { const xi = i; const yi = hist[i]; sumX += xi; sumY += yi; sumXY += xi*yi; sumXX += xi*xi; }
