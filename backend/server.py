@@ -184,10 +184,6 @@ def _build_asset_data(isin: str, period: str):
     df_long = fix_columns(stock.history(period="1y", interval="1d"))
     if df_long.empty:
         raise HTTPException(status_code=400, detail="No daily data")
-
-    current_price = round(float(df_long['Close'].iloc[-1]), 2)
-    prev_close = float(df_long['Close'].iloc[-2]) if len(df_long) > 1 else current_price
-    change_pct = round((current_price - prev_close) / prev_close * 100, 2)
     high52 = round(float(df_long['High'].max()), 2)
     low52 = round(float(df_long['Low'].min()), 2)
 
@@ -200,6 +196,31 @@ def _build_asset_data(isin: str, period: str):
             df_tf = df_tf[df_tf.index.date == last_day].copy()
     except Exception as e:
         print(f"TF {period} error {ticker}: {e}")
+
+    # Prefer intraday series for the current price when available (reduces perceived delay)
+    if not df_tf.empty and 'Close' in df_tf.columns:
+        current_price = round(float(df_tf['Close'].iloc[-1]), 2)
+        if len(df_tf) > 1:
+            prev_close = float(df_tf['Close'].iloc[-2])
+        else:
+            prev_close = float(df_long['Close'].iloc[-2]) if len(df_long) > 1 else current_price
+    else:
+        current_price = round(float(df_long['Close'].iloc[-1]), 2)
+        prev_close = float(df_long['Close'].iloc[-2]) if len(df_long) > 1 else current_price
+    change_pct = round((current_price - prev_close) / prev_close * 100, 2) if prev_close != 0 else 0.0
+
+    # Expose interval minutes so frontend can compute 1h forecast points
+    try:
+        if yf_interval.endswith('m'):
+            interval_minutes = int(yf_interval[:-1])
+        elif yf_interval.endswith('h'):
+            interval_minutes = int(yf_interval[:-1]) * 60
+        elif yf_interval.endswith('d'):
+            interval_minutes = 1440
+        else:
+            interval_minutes = 0
+    except Exception:
+        interval_minutes = 0
 
     if df_tf.empty or len(df_tf) < 2:
         df_tf = df_long.tail(30).copy()
@@ -262,6 +283,7 @@ def _build_asset_data(isin: str, period: str):
         "dayHigh": clean2(df_tf['High'].max()),
         "dayLow": clean2(df_tf['Low'].min()),
         "high52": high52, "low52": low52,
+        "interval_minutes": interval_minutes,
         **ai
     }
 

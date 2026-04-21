@@ -160,27 +160,21 @@ async function silentPriceRefresh(force = false) {
         const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
         if (!res.ok) return;
         const data = await res.json();
-
-        // Pulse animation if price changed
+        // Pulse animation if price changed and update full view (chart + header + AI)
         const priceEl = document.getElementById('current-price');
         if (STATE.lastPrice !== null && data.price !== STATE.lastPrice) {
             priceEl.classList.remove('price-updated');
             void priceEl.offsetWidth; // reflow
             priceEl.classList.add('price-updated');
         }
-        STATE.lastPrice = data.price;
 
-        // Update header prices only (don't redraw chart)
-        document.getElementById('current-price').textContent = `${data.price.toFixed(2)} €`;
-        const changeBadge = document.getElementById('current-change');
-        const sign = data.change >= 0 ? '+' : '';
-        changeBadge.textContent = `${sign}${data.change.toFixed(2)}%`;
-        changeBadge.className = `change-badge ${data.change >= 0 ? 'positive' : 'negative'}`;
-
-        // Update portfolio P&L
+        // Update state and refresh the full UI so charts reflect the latest data
+        STATE.currentData = data;
+        updateHeader(data);
+        updateChart(data);
+        updateAI(data);
+        updateStats(data);
         updatePortfolioDisplay(data.price);
-
-        // Check alerts
         checkAlerts(data);
     } catch (e) { /* silent */ }
 
@@ -430,6 +424,7 @@ function initCharts() {
 function updateChart(data) {
     const chart = STATE.priceChart;
     const isPositive = data.change >= 0;
+    let forecastValues = null;
 
     const ctx = document.getElementById('priceChart').getContext('2d');
     const grad = ctx.createLinearGradient(0, 0, 0, 260);
@@ -459,8 +454,72 @@ function updateChart(data) {
     const showVwap = document.getElementById('show-vwap')?.checked;
     chart.data.datasets[1].hidden = !showVwap;
 
+    // Simple 1-hour linear forecast (adds a dashed dataset) when backend provides interval info
+    try {
+        const intervalMin = data.interval_minutes || (STATE.currentTimeframe === '1d' ? 5 : 60);
+        const futureMinutes = 60; // 1 hour
+        const futurePoints = Math.max(1, Math.round(futureMinutes / Math.max(1, intervalMin)));
+        const histLen = chart.data.labels.length;
+        if (futurePoints > 0 && Array.isArray(data.dataseries) && data.dataseries.length >= 3 && chart.config.type !== 'candlestick') {
+            // Linear regression on last N points
+            const N = Math.min(30, data.dataseries.length);
+            const y = data.dataseries.slice(-N).map(v => Number(v));
+            let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+            for (let i = 0; i < N; i++) {
+                const xi = i;
+                const yi = y[i];
+                sumX += xi; sumY += yi; sumXY += xi * yi; sumXX += xi * xi;
+            }
+            const denom = (N * sumXX - sumX * sumX) || 1;
+            const slope = (N * sumXY - sumX * sumY) / denom;
+            const intercept = (sumY - slope * sumX) / N;
+
+            const forecast = [];
+            const futureLabels = [];
+            for (let k = 1; k <= futurePoints; k++) {
+                const xk = N - 1 + k;
+                const yk = intercept + slope * xk;
+                forecast.push(Number(yk.toFixed(4)));
+                const mins = intervalMin * k;
+                futureLabels.push(mins >= 60 ? `+${Math.round(mins/60)}h` : `+${mins}m`);
+            }
+
+            // Extend labels and append nulls to historic datasets
+            chart.data.labels = chart.data.labels.concat(futureLabels);
+            chart.data.datasets.forEach((ds) => {
+                if (ds.label === 'Prévision 1H') return; // handled separately
+                const hist = Array.isArray(ds.data) ? ds.data.slice(0, histLen) : new Array(histLen).fill(null);
+                ds.data = hist.concat(new Array(futurePoints).fill(null));
+            });
+
+            // Add or update forecast dataset
+            let fc = chart.data.datasets.find(d => d.label === 'Prévision 1H');
+            if (!fc) {
+                fc = {
+                    label: 'Prévision 1H',
+                    data: new Array(histLen).fill(null).concat(forecast),
+                    borderColor: '#94a3b8',
+                    borderDash: [6, 4],
+                    borderWidth: 1.2,
+                    pointRadius: 0,
+                    fill: false,
+                    tension: 0.3,
+                    spanGaps: true,
+                    order: 10
+                };
+                chart.data.datasets.push(fc);
+            } else {
+                fc.data = new Array(histLen).fill(null).concat(forecast);
+            }
+
+            // Save forecast values so we can include them later when computing visible prices
+            forecastValues = forecast;
+        }
+    } catch (e) { /* non-fatal forecast error */ }
+
     // Auto-scale Y axis to visible data
     const visiblePrices = [...data.dataseries];
+    if (forecastValues) visiblePrices.push(...forecastValues);
     if (showVwap) visiblePrices.push(...cleanVwap);
     if (!chart.data.datasets[2].hidden && data.sma20) visiblePrices.push(...data.sma20);
     if (!chart.data.datasets[4].hidden && data.bbUpper) visiblePrices.push(...data.bbUpper);
