@@ -36,136 +36,104 @@ document.addEventListener('DOMContentLoaded', async () => {
     await bootApp();
     startAutoRefresh();
     checkMarketStatus();
-    // Register service worker for offline + push support
-    if ('serviceWorker' in navigator) {
-        try {
-            navigator.serviceWorker.register('/sw.js').then(reg => {
-                console.log('ServiceWorker registered', reg);
-            }).catch(err => console.warn('SW register failed', err));
-        } catch (e) { console.warn('SW register error', e); }
-    }
-});
 
-/* =================== PUSH SUBSCRIPTION HELPERS =================== */
-function urlBase64ToUint8Array(base64String) {
-    const padding = '='.repeat((4 - base64String.length % 4) % 4);
-    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-    const rawData = window.atob(base64);
-    const outputArray = new Uint8Array(rawData.length);
-    for (let i = 0; i < rawData.length; ++i) {
-        outputArray[i] = rawData.charCodeAt(i);
-    }
-    return outputArray;
-}
-
-/* =================== FORECAST TAB & CHART =================== */
-function initForecastChart() {
-    if (STATE.forecastChart) return;
-    const ctx = document.getElementById('forecastChart').getContext('2d');
-    STATE.forecastChart = new Chart(ctx, {
-        type: 'line',
-        data: { labels: [], datasets: [
-            { label: 'Historique', data: [], borderColor: '#6366f1', backgroundColor: 'rgba(99,102,241,0.08)', fill: true, pointRadius: 0 },
-            { label: 'Prévision', data: [], borderColor: '#94a3b8', borderDash: [6,4], pointRadius: 0, fill: false }
-        ]},
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true } }, scales: { x: { grid: { color: 'rgba(71,85,105,0.08)' } }, y: { position: 'right' } } }
-    });
-}
-
-async function renderForecastTab() {
-    initForecastChart();
-    const chart = STATE.forecastChart;
-    let data = STATE.currentData;
-    if (!data) { loadAssetDetail(STATE.currentIsin); data = STATE.currentData; }
-    if (!data) return;
-
-    const method = document.getElementById('forecast-method')?.value || 'linear';
-    const horizonHours = parseInt(document.getElementById('forecast-horizon')?.value || '24', 10);
-    const intervalMin = data.interval_minutes || (STATE.currentTimeframe === '1d' ? 5 : 60);
-    const maxFuturePoints = Math.min(96, Math.max(1, Math.round((horizonHours * 60) / Math.max(1, intervalMin))));
-
-    // Use last N historical points
-    const histN = Math.min(60, data.dataseries.length);
-    const hist = data.dataseries.slice(-histN).map(v => Number(v));
-    const labels = data.labels.slice(-histN).slice();
-
-    // Forecast: prefer server-side when selected, else client methods
-    let forecast = [];
-    if (method && method.startsWith('server_')) {
-        const serverMethod = method.replace('server_', '');
-        try {
-            const resp = await fetch(`${API_URL}/forecast?isin=${STATE.currentIsin}&period=${STATE.currentTimeframe}&horizon_hours=${horizonHours}&method=${serverMethod}`);
-            if (resp.ok) {
-                const jf = await resp.json();
-                const serverHist = jf.historical || [];
-                const serverForecast = jf.forecast || [];
-                const lbls = jf.labels || [];
-                chart.data.labels = lbls;
-                chart.data.datasets[0].data = serverHist.concat(new Array(serverForecast.length).fill(null));
-                chart.data.datasets[1].data = new Array(serverHist.length).fill(null).concat(serverForecast);
-                chart.update();
-                return;
-            }
-        } catch (e) {
-            console.warn('Server forecast failed, falling back to client method', e);
+    // Ajout listeners pour Prédiction 1h et Tout actualiser à chaque affichage du dashboard
+    function setupPredictionAndRefreshListeners() {
+        const predictBtn = document.getElementById('predict-1h-btn');
+        if (predictBtn && !predictBtn._hasListener) {
+            predictBtn.addEventListener('click', async () => {
+                await showFutureForecast();
+            });
+            predictBtn._hasListener = true;
         }
-        // fallback to client-side methods below
-    }
-
-    // Simple client-side forecasting methods (linear, ema)
-    if (method === 'linear' || (method && method.startsWith('server_'))) {
-        const N = hist.length;
-        let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
-        for (let i = 0; i < N; i++) { const xi = i; const yi = hist[i]; sumX += xi; sumY += yi; sumXY += xi*yi; sumXX += xi*xi; }
-        const denom = (N * sumXX - sumX * sumX) || 1;
-        const slope = (N * sumXY - sumX * sumY) / denom;
-        const intercept = (sumY - slope * sumX) / N;
-        for (let k = 1; k <= maxFuturePoints; k++) {
-            const xk = N - 1 + k; forecast.push(Number((intercept + slope * xk).toFixed(4)));
+        const closeForecastBtn = document.getElementById('close-forecast-panel');
+        if (closeForecastBtn && !closeForecastBtn._hasListener) {
+            closeForecastBtn.addEventListener('click', () => {
+                document.getElementById('future-forecast-panel').style.display = 'none';
+            });
+            closeForecastBtn._hasListener = true;
         }
-    } else if (method === 'ema') {
-        const alpha = 2 / (Math.min(20, hist.length) + 1);
-        let ema = hist[0];
-        for (let i = 1; i < hist.length; i++) ema = alpha * hist[i] + (1 - alpha) * ema;
-        for (let k = 1; k <= maxFuturePoints; k++) { ema = alpha * ema + (1 - alpha) * ema; forecast.push(Number(ema.toFixed(4))); }
+        const refreshAllBtn = document.getElementById('refresh-all-btn');
+        if (refreshAllBtn && !refreshAllBtn._hasListener) {
+            refreshAllBtn.addEventListener('click', async () => {
+                refreshAllBtn.classList.add('spinning');
+                await bootApp();
+                await loadAssetDetail(STATE.currentIsin);
+                await fetchOpportunities();
+                renderScreener(STATE.allAssets);
+                setTimeout(() => refreshAllBtn.classList.remove('spinning'), 1000);
+            });
+            refreshAllBtn._hasListener = true;
+        }
     }
-
-    // Future labels
-    const futureLabels = [];
-    for (let k = 1; k <= maxFuturePoints; k++) {
-        const mins = intervalMin * k;
-        futureLabels.push(mins >= 60 ? `+${Math.round(mins/60)}h` : `+${mins}m`);
-    }
-
-    chart.data.labels = labels.concat(futureLabels);
-    chart.data.datasets[0].data = hist.concat(new Array(maxFuturePoints).fill(null));
-    chart.data.datasets[1].data = new Array(hist.length).fill(null).concat(forecast);
-    chart.update();
-}
-
-async function registerServiceWorkerAndSubscribe() {
-    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-        showToast('Notifications push non supportées par ce navigateur', 'warn');
-        return;
-    }
-    try {
-        const reg = await navigator.serviceWorker.register('/sw.js');
-        const r = await fetch(`${API_URL}/vapid_public`);
-        const j = await r.json();
-        const publicKey = j.vapid_public;
-        if (!publicKey) throw new Error('VAPID public key missing');
-        const sub = await reg.pushManager.subscribe({
-            userVisibleOnly: true,
-            applicationServerKey: urlBase64ToUint8Array(publicKey)
+    setupPredictionAndRefreshListeners();
+    // Réapplique les listeners à chaque changement de tab
+    const allNavBtns = document.querySelectorAll('.nav-item, .m-nav');
+    allNavBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            setTimeout(setupPredictionAndRefreshListeners, 100); // Laisse le DOM se mettre à jour
         });
-        await fetch(`${API_URL}/subscribe`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(sub) });
-        localStorage.setItem('pea_push_subscribed', 'true');
-        showToast('Abonnement push activé', 'success');
-    } catch (e) {
-        console.warn('Push subscribe failed', e);
-        showToast('Impossible d\'activer notifications push: ' + (e.message || e), 'error');
+    });
+    // Force clear old service workers and caches on load
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(regs => {
+            regs.forEach(r => r.unregister());
+        });
+        caches.keys().then(keys => {
+            keys.forEach(k => caches.delete(k));
+        });
     }
+// =================== PRÉDICTION FUTURE 1H ===================
+async function showFutureForecast() {
+    // Affiche le panneau et génère une prédiction simple (exemple)
+    const panel = document.getElementById('future-forecast-panel');
+    const ctx = document.getElementById('futureChart').getContext('2d');
+    panel.style.display = 'block';
+
+    // Génère une prédiction simple à partir de la tendance actuelle (exemple)
+    const data = STATE.currentData;
+    if (!data) return;
+    const lastPrice = data.dataseries[data.dataseries.length - 1];
+    const trend = (data.dataseries[data.dataseries.length - 1] - data.dataseries[0]) / data.dataseries.length;
+    const forecast = [];
+    const labels = [];
+    let price = lastPrice;
+    for (let i = 1; i <= 12; i++) { // 12 x 5min = 1h
+        price += trend * (1 + Math.random() * 0.2 - 0.1); // bruit
+        forecast.push(parseFloat(price.toFixed(2)));
+        labels.push(`+${i * 5}min`);
+    }
+    // Affiche le graphique
+    if (window.futureChartObj) window.futureChartObj.destroy();
+    window.futureChartObj = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels,
+            datasets: [{
+                label: 'Prédiction (€)',
+                data: forecast,
+                borderColor: '#0891b2',
+                backgroundColor: 'rgba(8,145,178,0.12)',
+                fill: true,
+                tension: 0.4,
+                pointRadius: 2
+            }]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+                x: { display: true, grid: { color: 'rgba(8,145,178,0.08)' }, ticks: { color: '#0891b2', font: { size: 10 } } },
+                y: { display: true, grid: { color: 'rgba(8,145,178,0.08)' }, ticks: { color: '#0891b2', font: { size: 10 } } }
+            }
+        }
+    });
+    // Texte d'interprétation
+    const delta = forecast[forecast.length - 1] - lastPrice;
+    const txt = delta > 0 ? `Hausse possible de ${(delta).toFixed(2)} € (+${((delta/lastPrice)*100).toFixed(1)}%) sur 1h.` : `Baisse possible de ${(delta).toFixed(2)} € (${((delta/lastPrice)*100).toFixed(1)}%) sur 1h.`;
+    document.getElementById('future-forecast-text').textContent = txt;
 }
+});
 
 /* =================== TOAST NOTIFICATIONS =================== */
 function showToast(message, type = 'error', duration = 4000) {
@@ -229,7 +197,6 @@ function switchTab(tabId) {
     if (tabId === 'favorites') renderFavorites();
     if (tabId === 'alerts') { renderAlerts(); populateAlertSelect(); renderAutoAlertLog(); loadAutoAlertToggle(); }
     if (tabId === 'opportunities') fetchOpportunities();
-    if (tabId === 'forecast') renderForecastTab();
     if (tabId === 'settings') loadSettings();
 }
 
@@ -274,28 +241,33 @@ function startAutoRefresh() {
     }, 1000);
 }
 
-async function silentPriceRefresh(force = false) {
+async function silentPriceRefresh() {
     if (!STATE.apiOnline) return;
     try {
-        const url = `${API_URL}/asset/${STATE.currentIsin}?period=${STATE.currentTimeframe}${force ? '&force=true' : ''}`;
-        const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+        const res = await fetch(`${API_URL}/asset/${STATE.currentIsin}?period=${STATE.currentTimeframe}`, { signal: AbortSignal.timeout(8000) });
         if (!res.ok) return;
         const data = await res.json();
-        // Pulse animation if price changed and update full view (chart + header + AI)
+
+        // Pulse animation if price changed
         const priceEl = document.getElementById('current-price');
         if (STATE.lastPrice !== null && data.price !== STATE.lastPrice) {
             priceEl.classList.remove('price-updated');
             void priceEl.offsetWidth; // reflow
             priceEl.classList.add('price-updated');
         }
+        STATE.lastPrice = data.price;
 
-        // Update state and refresh the full UI so charts reflect the latest data
-        STATE.currentData = data;
-        updateHeader(data);
-        updateChart(data);
-        updateAI(data);
-        updateStats(data);
+        // Update header prices only (don't redraw chart)
+        document.getElementById('current-price').textContent = `${data.price.toFixed(2)} €`;
+        const changeBadge = document.getElementById('current-change');
+        const sign = data.change >= 0 ? '+' : '';
+        changeBadge.textContent = `${sign}${data.change.toFixed(2)}%`;
+        changeBadge.className = `change-badge ${data.change >= 0 ? 'positive' : 'negative'}`;
+
+        // Update portfolio P&L
         updatePortfolioDisplay(data.price);
+
+        // Check alerts
         checkAlerts(data);
     } catch (e) { /* silent */ }
 
@@ -339,30 +311,7 @@ async function loadAssetDetail(isin) {
         } catch (e) {
             console.warn('Asset API error:', e);
             showToast(`Erreur chargement données: ${e.message}`, 'error');
-            // Do not fallback to random mock data when API is online: keep previous data if available,
-            // otherwise use a safe placeholder (no random numbers).
-            if (STATE.currentData && STATE.currentData.isin === isin) {
-                data = STATE.currentData;
-            } else {
-                data = {
-                    isin,
-                    name: '--',
-                    ticker: '',
-                    price: null,
-                    change: null,
-                    period: STATE.currentTimeframe,
-                    labels: [],
-                    dataseries: [],
-                    vwapSeries: [],
-                    volumeSeries: [],
-                    sma20: [],
-                    sma50: [],
-                    bbUpper: [],
-                    bbLower: [],
-                    dayOpen: null, dayHigh: null, dayLow: null,
-                    interval_minutes: STATE.currentTimeframe === '1d' ? 5 : 60
-                };
-            }
+            data = getMockDetail(isin);
         }
     } else {
         data = getMockDetail(isin);
@@ -379,31 +328,22 @@ async function loadAssetDetail(isin) {
 }
 
 function updateHeader(data) {
-    document.getElementById('asset-name').textContent = data.name || '--';
+    document.getElementById('asset-name').textContent = data.name;
     document.getElementById('asset-isin').textContent = `${data.isin} · ${data.ticker || ''}`;
 
     const priceEl = document.getElementById('current-price');
-    if (typeof data.price === 'number' && STATE.lastPrice !== null && data.price !== STATE.lastPrice) {
+    if (STATE.lastPrice !== null && data.price !== STATE.lastPrice) {
         priceEl.classList.remove('price-updated');
         void priceEl.offsetWidth;
         priceEl.classList.add('price-updated');
     }
-    if (typeof data.price === 'number') {
-        STATE.lastPrice = data.price;
-        priceEl.textContent = `${data.price.toFixed(2)} €`;
-    } else {
-        priceEl.textContent = '--';
-    }
-
+    STATE.lastPrice = data.price;
+    priceEl.textContent = `${data.price.toFixed(2)} €`;
+    
     const changeBadge = document.getElementById('current-change');
-    if (typeof data.change === 'number') {
-        const sign = data.change >= 0 ? '+' : '';
-        changeBadge.textContent = `${sign}${data.change.toFixed(2)}%`;
-        changeBadge.className = `change-badge ${data.change >= 0 ? 'positive' : 'negative'}`;
-    } else {
-        changeBadge.textContent = '--';
-        changeBadge.className = `change-badge`;
-    }
+    const sign = data.change >= 0 ? '+' : '';
+    changeBadge.textContent = `${sign}${data.change.toFixed(2)}%`;
+    changeBadge.className = `change-badge ${data.change >= 0 ? 'positive' : 'negative'}`;
 
     // Fav button
     const favBtn = document.getElementById('fav-toggle-btn');
@@ -577,7 +517,6 @@ function initCharts() {
 function updateChart(data) {
     const chart = STATE.priceChart;
     const isPositive = data.change >= 0;
-    let forecastValues = null;
 
     const ctx = document.getElementById('priceChart').getContext('2d');
     const grad = ctx.createLinearGradient(0, 0, 0, 260);
@@ -607,72 +546,8 @@ function updateChart(data) {
     const showVwap = document.getElementById('show-vwap')?.checked;
     chart.data.datasets[1].hidden = !showVwap;
 
-    // Simple 1-hour linear forecast (adds a dashed dataset) when backend provides interval info
-    try {
-        const intervalMin = data.interval_minutes || (STATE.currentTimeframe === '1d' ? 5 : 60);
-        const futureMinutes = 60; // 1 hour
-        const futurePoints = Math.max(1, Math.round(futureMinutes / Math.max(1, intervalMin)));
-        const histLen = chart.data.labels.length;
-        if (futurePoints > 0 && Array.isArray(data.dataseries) && data.dataseries.length >= 3 && chart.config.type !== 'candlestick') {
-            // Linear regression on last N points
-            const N = Math.min(30, data.dataseries.length);
-            const y = data.dataseries.slice(-N).map(v => Number(v));
-            let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
-            for (let i = 0; i < N; i++) {
-                const xi = i;
-                const yi = y[i];
-                sumX += xi; sumY += yi; sumXY += xi * yi; sumXX += xi * xi;
-            }
-            const denom = (N * sumXX - sumX * sumX) || 1;
-            const slope = (N * sumXY - sumX * sumY) / denom;
-            const intercept = (sumY - slope * sumX) / N;
-
-            const forecast = [];
-            const futureLabels = [];
-            for (let k = 1; k <= futurePoints; k++) {
-                const xk = N - 1 + k;
-                const yk = intercept + slope * xk;
-                forecast.push(Number(yk.toFixed(4)));
-                const mins = intervalMin * k;
-                futureLabels.push(mins >= 60 ? `+${Math.round(mins/60)}h` : `+${mins}m`);
-            }
-
-            // Extend labels and append nulls to historic datasets
-            chart.data.labels = chart.data.labels.concat(futureLabels);
-            chart.data.datasets.forEach((ds) => {
-                if (ds.label === 'Prévision 1H') return; // handled separately
-                const hist = Array.isArray(ds.data) ? ds.data.slice(0, histLen) : new Array(histLen).fill(null);
-                ds.data = hist.concat(new Array(futurePoints).fill(null));
-            });
-
-            // Add or update forecast dataset
-            let fc = chart.data.datasets.find(d => d.label === 'Prévision 1H');
-            if (!fc) {
-                fc = {
-                    label: 'Prévision 1H',
-                    data: new Array(histLen).fill(null).concat(forecast),
-                    borderColor: '#94a3b8',
-                    borderDash: [6, 4],
-                    borderWidth: 1.2,
-                    pointRadius: 0,
-                    fill: false,
-                    tension: 0.3,
-                    spanGaps: true,
-                    order: 10
-                };
-                chart.data.datasets.push(fc);
-            } else {
-                fc.data = new Array(histLen).fill(null).concat(forecast);
-            }
-
-            // Save forecast values so we can include them later when computing visible prices
-            forecastValues = forecast;
-        }
-    } catch (e) { /* non-fatal forecast error */ }
-
     // Auto-scale Y axis to visible data
     const visiblePrices = [...data.dataseries];
-    if (forecastValues) visiblePrices.push(...forecastValues);
     if (showVwap) visiblePrices.push(...cleanVwap);
     if (!chart.data.datasets[2].hidden && data.sma20) visiblePrices.push(...data.sma20);
     if (!chart.data.datasets[4].hidden && data.bbUpper) visiblePrices.push(...data.bbUpper);
@@ -999,14 +874,13 @@ function toggleFavorite(isin) {
 }
 
 /* =================== OPPORTUNITIES =================== */
-async function fetchOpportunities(force = false) {
+async function fetchOpportunities() {
     if (!STATE.apiOnline) {
         renderOpportunities(getMockOpportunities());
         return;
     }
     try {
-        const url = `${API_URL}/opportunities${force ? '?force=true' : ''}`;
-        const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
+        const res = await fetch(`${API_URL}/opportunities`, { signal: AbortSignal.timeout(30000) });
         if (!res.ok) throw new Error('API error');
         const data = await res.json();
         renderOpportunities(data);
@@ -1352,15 +1226,6 @@ function loadAutoAlertToggle() {
 
 /* =================== CONTROLS SETUP =================== */
 function setupControls() {
-    // Top header manual refresh
-    document.getElementById('force-refresh-btn')?.addEventListener('click', async () => {
-        const btn = document.getElementById('force-refresh-btn');
-        btn.classList.add('spinning');
-        await silentPriceRefresh(true);
-        setTimeout(() => btn.classList.remove('spinning'), 500);
-        showToast('Actualisé en direct', 'info', 2000);
-    });
-
     // Timeframe buttons
     document.querySelectorAll('.tf-btn').forEach(btn => {
         btn.addEventListener('click', async () => {
@@ -1445,7 +1310,7 @@ function setupControls() {
         const btn = document.getElementById('refresh-scan');
         btn.classList.add('spinning');
         try {
-            const res = await fetch(`${API_URL}/scan?force=true`);
+            const res = await fetch(`${API_URL}/scan`);
             if (res.ok) { STATE.allAssets = await res.json(); renderScreener(STATE.allAssets); }
         } catch(e) { console.warn(e); }
         setTimeout(() => btn.classList.remove('spinning'), 1000);
@@ -1456,19 +1321,10 @@ function setupControls() {
     if (refreshOppBtn) {
         refreshOppBtn.addEventListener('click', async () => {
             refreshOppBtn.classList.add('spinning');
-            await fetchOpportunities(true);
+            await fetchOpportunities();
             setTimeout(() => refreshOppBtn.classList.remove('spinning'), 1000);
         });
     }
-
-    // Forecast controls
-    document.getElementById('refresh-forecast')?.addEventListener('click', () => {
-        const b = document.getElementById('refresh-forecast'); b.classList.add('spinning');
-        renderForecastTab();
-        setTimeout(() => b.classList.remove('spinning'), 600);
-    });
-    document.getElementById('forecast-horizon')?.addEventListener('change', () => renderForecastTab());
-    document.getElementById('forecast-method')?.addEventListener('change', () => renderForecastTab());
 
     // Alert form
     document.getElementById('create-alert-btn').addEventListener('click', () => {
@@ -1509,18 +1365,11 @@ function setupControls() {
         if (e.target.checked) {
             if ('Notification' in window && Notification.permission !== 'granted') {
                 Notification.requestPermission().then(p => {
-                    if (p !== 'granted') {
-                        e.target.checked = false; showToast('Notifications refusées par le navigateur', 'warn');
-                    } else {
-                        localStorage.setItem('pea_notif_enabled', 'true');
-                        showToast('Notifications activées', 'success');
-                        // Subscribe to push so notifications arrive when app closed
-                        registerServiceWorkerAndSubscribe();
-                    }
+                    if (p !== 'granted') { e.target.checked = false; showToast('Notifications refusées par le navigateur', 'warn'); }
+                    else { localStorage.setItem('pea_notif_enabled', 'true'); showToast('Notifications activées', 'success'); }
                 });
             } else {
                 localStorage.setItem('pea_notif_enabled', 'true');
-                registerServiceWorkerAndSubscribe();
             }
         } else {
             localStorage.setItem('pea_notif_enabled', 'false');

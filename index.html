@@ -33,10 +33,6 @@
                 <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
                 <span>Opportunités</span>
             </button>
-            <button class="nav-item" data-tab="forecast">
-                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 13l3-3 4 4 6-6"/></svg>
-                <span>Prévision</span>
-            </button>
             <button class="nav-item" data-tab="search">
                 <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                 <span>Screener</span>
@@ -81,8 +77,9 @@
                         <span id="current-price" class="big-price">---.-- €</span>
                         <span id="current-change" class="change-badge">---%</span>
                     </div>
-                    <button id="force-refresh-btn" title="Actualiser instantanément">
-                        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                    <button id="refresh-all-btn" title="Tout actualiser" style="margin-right:10px;background:#6366f1;color:#fff;padding:7px 14px;border-radius:7px;font-weight:600;display:inline-flex;align-items:center;gap:6px;">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                        Tout actualiser
                     </button>
                     <button id="fav-toggle-btn" title="Ajouter aux favoris">
                         <svg id="fav-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
@@ -133,6 +130,7 @@
                         <button class="tf-btn" data-tf="1mo">1M</button>
                         <button class="tf-btn" data-tf="6mo">6M</button>
                         <button class="tf-btn" data-tf="1y">1A</button>
+                        <button class="tf-btn" id="trend-committee-btn" style="margin-left:12px;background:#0891b2;color:#fff;">Comité de tendance</button>
                     </div>
                     <div class="chart-indicators">
                         <div class="chart-type-btns">
@@ -172,6 +170,15 @@
                 <div class="chart-wrapper">
                     <canvas id="priceChart"></canvas>
                     <div id="chart-crosshair-value" class="crosshair-tooltip" style="display:none;"></div>
+                    <!-- Zone de comité de tendance -->
+                    <div id="trend-committee-panel" class="glass" style="display:none;margin-top:16px;padding:16px 12px 8px 12px;background:rgba(8,145,178,0.08);border-radius:12px;">
+                        <div style="display:flex;align-items:center;justify-content:space-between;">
+                            <div style="font-weight:600;color:#0891b2;">Comité de tendance IA</div>
+                            <button id="close-committee-panel" style="background:none;border:none;font-size:18px;line-height:1;color:#0891b2;cursor:pointer;">&times;</button>
+                        </div>
+                        <canvas id="committeeChart" height="120" style="margin-top:8px;"></canvas>
+                        <div id="committee-forecast-text" style="margin-top:8px;font-size:0.95rem;color:#0891b2;"></div>
+                    </div>
                 </div>
 
                 <!-- Volume Chart -->
@@ -255,42 +262,6 @@
             </div>
             <div id="opp-list" class="opp-list">
                 <div class="loading-state"><div class="spinner"></div><p>Analyse en cours...</p></div>
-            </div>
-        </section>
-
-        <!-- ============== TAB: PRÉVISION ============== -->
-        <section id="tab-forecast" class="tab">
-            <div class="page-header">
-                <div>
-                    <h1>Prévision &amp; Scénarios</h1>
-                    <p style="font-size:0.75rem;color:var(--text-2);margin-top:2px;">Visualisez les projections à court terme (1h, 6h, 24h)</p>
-                </div>
-                <div>
-                    <button class="refresh-btn" id="refresh-forecast">Actualiser</button>
-                </div>
-            </div>
-            <div class="chart-panel glass">
-                <div class="chart-wrapper">
-                    <canvas id="forecastChart"></canvas>
-                </div>
-                <div class="stats-row">
-                    <div class="stat"><span class="stat-label">Horizon</span>
-                        <select id="forecast-horizon">
-                            <option value="1">1h</option>
-                            <option value="6">6h</option>
-                            <option value="24" selected>24h</option>
-                        </select>
-                    </div>
-                    <div class="stat"><span class="stat-label">Méthode</span>
-                        <select id="forecast-method">
-                            <option value="linear">Régression linéaire (client)</option>
-                            <option value="ema">EMA extrapolation (client)</option>
-                            <option value="server_arima">Prévision serveur (ARIMA)</option>
-                            <option value="server_auto_arima">Prévision serveur (auto ARIMA)</option>
-                            <option value="server_ml">Modèle ML serveur (GBR)</option>
-                        </select>
-                    </div>
-                </div>
             </div>
         </section>
 
@@ -502,9 +473,6 @@
         </button>
         <button class="m-nav" data-tab="opportunities">
             <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-        </button>
-        <button class="m-nav" data-tab="forecast">
-            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 13l3-3 4 4 6-6"/></svg>
         </button>
         <button class="m-nav" data-tab="search">
             <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
