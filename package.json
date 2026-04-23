@@ -1,0 +1,12 @@
+{
+  "name": "pea-tracker-ia",
+  "version": "1.0.0",
+  "scripts": {
+    "prepare-apk": "mkdir www 2>nul & copy index.html www\\ & copy app.js www\\ & copy style.css www\\ & copy manifest.json www\\"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.0.0",
+    "@capacitor/core": "^6.0.0",
+    "@capacitor/cli": "^6.0.0"
+  }
+}

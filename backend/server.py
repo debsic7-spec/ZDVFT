@@ -81,6 +81,8 @@ async def rate_limit_middleware(request: Request, call_next):
 
 # ================= HELPERS ================= #
 def clean(v):
+    if v is None or (isinstance(v, float) and math.isnan(v)):
+        return None
     f = float(v)
     return round(f, 4) if math.isfinite(f) else None
 
@@ -115,6 +117,16 @@ def compute_ai_signals(df_intraday, df_long, current_price):
     macd_sig = float(macd_ind.macd_signal().iloc[-1]) if pd.notna(macd_ind.macd_signal().iloc[-1]) else 0.0
     macd_hist = macd_val - macd_sig
 
+    # Ajout des Bandes de Bollinger pour évaluer les sur-extensions du prix
+    bb_indicator = ta.volatility.BollingerBands(close=df_long['Close'], window=20, window_dev=2)
+    bb_lower = float(bb_indicator.bollinger_lband().iloc[-1]) if pd.notna(bb_indicator.bollinger_lband().iloc[-1]) else 0.0
+    bb_upper = float(bb_indicator.bollinger_hband().iloc[-1]) if pd.notna(bb_indicator.bollinger_hband().iloc[-1]) else 0.0
+
+    # Calcul de la volatilité (ATR) pour la force du signal
+    atr_ind = ta.volatility.AverageTrueRange(high=df_long['High'], low=df_long['Low'], close=df_long['Close'], window=14)
+    atr_val = float(atr_ind.average_true_range().iloc[-1]) if pd.notna(atr_ind.average_true_range().iloc[-1]) else 0.0
+    atr_pct = (atr_val / current_price) * 100 if current_price > 0 else 0.0
+
     if 'VWAP' in df_intraday.columns and not df_intraday.empty:
         vwap_latest = float(df_intraday['VWAP'].iloc[-1])
         vwap_pct = 65.0 if current_price > vwap_latest else 35.0
@@ -125,38 +137,58 @@ def compute_ai_signals(df_intraday, df_long, current_price):
                     "macd_signal": round(macd_sig, 4), "macd_hist": round(macd_hist, 4),
                     "vwap_signal_pct": vwap_pct})
 
-    signals_buy = signals_sell = 0
-    if rsi < 30: signals_buy += 2
+    # === CORRECTION DES SIGNAUX IA ===
+    signals_buy = 0
+    signals_sell = 0
+    if rsi < 30: signals_buy += 3
     elif rsi < 40: signals_buy += 1
-    elif rsi > 70: signals_sell += 2
+    elif rsi > 70: signals_sell += 3
     elif rsi > 60: signals_sell += 1
-    if macd_hist > 0: signals_buy += 1
-    else: signals_sell += 1
+
+    if macd_hist > 0 and macd_val < 0: signals_buy += 2  # Croisement haussier en zone survendue
+    elif macd_hist > 0 and macd_hist > float(macd_ind.macd_diff().iloc[-2]): signals_buy += 1 # MACD en accélération
+    elif macd_hist < 0 and macd_val > 0: signals_sell += 2 # Croisement baissier en zone surachetée
+    elif macd_hist < 0: signals_sell += 1
+
     if vwap_pct > 50: signals_buy += 1
     else: signals_sell += 1
 
-    if signals_buy >= 3:
+    # Détection Squeeze / Épuisement via Bollinger
+    if bb_lower > 0 and current_price <= bb_lower * 1.01: signals_buy += 2
+    if bb_upper > 0 and current_price >= bb_upper * 0.99: signals_sell += 2
+    
+    # Bonus Momentum : si l'actif bouge fort, on accentue le signal dominant
+    if atr_pct > 2.5:
+        if rsi < 35: signals_buy += 1
+        if rsi > 65: signals_sell += 1
+        
+    score_diff = signals_buy - signals_sell
+
+    if score_diff >= 4:
         result["ai_status"] = "ACHETER FORT"
-        result["ai_details"] = f"RSI survendu ({rsi:.0f}). Signal MACD haussier avec rebond VWAP."
-    elif signals_sell >= 3:
-        result["ai_status"] = "VENDRE"
-        result["ai_details"] = f"RSI surchauffe ({rsi:.0f}). Pression baissiÃ¨re confirmÃ©e."
-    elif signals_buy >= 2:
+        result["ai_details"] = f"Multiples signaux (RSI: {rsi:.0f}, MACD+, Proche BB Bas)."
+    elif score_diff <= -4:
+        result["ai_status"] = "VENDRE FORT"
+        result["ai_details"] = f"Surchauffe baissière (RSI: {rsi:.0f}, MACD-, Proche BB Haut)."
+    elif score_diff >= 2:
         result["ai_status"] = "ACHETER"
-        result["ai_details"] = f"Configuration favorable. RSI : {rsi:.0f}, MACD positif."
+        result["ai_details"] = f"Configuration favorable. RSI : {rsi:.0f}."
+    elif score_diff <= -2:
+        result["ai_status"] = "VENDRE"
+        result["ai_details"] = f"Pression baissière confirmée. RSI : {rsi:.0f}."
     else:
         result["ai_status"] = "GARDER"
-        result["ai_details"] = "Aucun signal fort. Consolidation en cours."
+        result["ai_details"] = "Aucun signal directionnel fort. Phase de consolidation."
+
     return result
 
-
-# ================= ASSET ENDPOINT ================= #
+# ================= ENDPOINTS ================= #
 @app.get("/api/asset/{isin}")
-def get_asset_data(isin: str, period: str = "1d"):
+def get_asset_data(isin: str, period: str = '1d'):
     if isin not in ASSET_MAPPING:
         raise HTTPException(status_code=404, detail="Asset not found")
     if period not in TIMEFRAME_MAP:
-        period = "1d"
+        raise HTTPException(status_code=400, detail="Invalid period")
 
     cache_key = f"asset:{isin}:{period}"
     cached = cache_get(cache_key)
@@ -184,11 +216,30 @@ def _build_asset_data(isin: str, period: str):
     if df_long.empty:
         raise HTTPException(status_code=400, detail="No daily data")
 
-    current_price = round(float(df_long['Close'].iloc[-1]), 2)
-    prev_close = float(df_long['Close'].iloc[-2]) if len(df_long) > 1 else current_price
-    change_pct = round((current_price - prev_close) / prev_close * 100, 2)
-    high52 = round(float(df_long['High'].max()), 2)
-    low52 = round(float(df_long['Low'].min()), 2)
+    # Vérification des valeurs manquantes
+    close_last = df_long['Close'].iloc[-1]
+    if close_last is None or pd.isna(close_last):
+        raise HTTPException(status_code=400, detail="Valeur 'Close' manquante dans les données")
+    current_price = round(float(close_last), 2)
+
+    if len(df_long) > 1:
+        close_prev = df_long['Close'].iloc[-2]
+        if close_prev is None or pd.isna(close_prev):
+            raise HTTPException(status_code=400, detail="Valeur 'Close' précédente manquante dans les données")
+        prev_close = float(close_prev)
+    else:
+        prev_close = current_price
+
+    change_pct = round((current_price - prev_close) / prev_close * 100, 2) if prev_close != 0 else 0.0
+
+    high52_val = df_long['High'].max()
+    low52_val = df_long['Low'].min()
+    if high52_val is None or pd.isna(high52_val):
+        raise HTTPException(status_code=400, detail="Valeur 'High' manquante dans les données")
+    if low52_val is None or pd.isna(low52_val):
+        raise HTTPException(status_code=400, detail="Valeur 'Low' manquante dans les données")
+    high52 = round(float(high52_val), 2)
+    low52 = round(float(low52_val), 2)
 
     # Timeframe data
     df_tf = pd.DataFrame()
@@ -234,6 +285,28 @@ def _build_asset_data(isin: str, period: str):
         ml, ms, mh = ml.tail(len(df_tf)), ms.tail(len(df_tf)), mh.tail(len(df_tf))
 
     ai = compute_ai_signals(df_tf, df_long, current_price)
+    
+    # === GÉNÉRATION DU BACKTEST VISUEL (Signaux historiques) ===
+    buy_signals = []
+    sell_signals = []
+    mh_list = mh.tolist()
+    rsi_list = rsi_chart.tolist()
+    for i in range(len(df_tf)):
+        p = float(df_tf['Close'].iloc[i])
+        r = float(rsi_list[i]) if not pd.isna(rsi_list[i]) else 50.0
+        m_h = float(mh_list[i]) if not pd.isna(mh_list[i]) else 0.0
+        prev_mh = float(mh_list[i-1]) if i > 0 and not pd.isna(mh_list[i-1]) else 0.0
+        
+        if r < 40 and m_h > 0 and prev_mh <= 0:  # Achat simulé (Affiné)
+            buy_signals.append(p * 0.99) # Léger décalage visuel sous le prix
+            sell_signals.append(None)
+        elif r > 60 and m_h < 0 and prev_mh >= 0: # Vente simulée (Affiné)
+            buy_signals.append(None)
+            sell_signals.append(p * 1.01) # Léger décalage visuel sur le prix
+        else:
+            buy_signals.append(None)
+            sell_signals.append(None)
+
     labels = [idx.strftime(label_fmt) for idx in df_tf.index]
 
     return {
@@ -257,6 +330,8 @@ def _build_asset_data(isin: str, period: str):
         "macdSeries": [clean(v) for v in ml],
         "macdSignalSeries": [clean(v) for v in ms],
         "macdHistSeries": [clean(v) for v in mh],
+        "buySignals": [clean(v) for v in buy_signals],
+        "sellSignals": [clean(v) for v in sell_signals],
         "dayOpen": clean2(df_tf['Open'].iloc[0]),
         "dayHigh": clean2(df_tf['High'].max()),
         "dayLow": clean2(df_tf['Low'].min()),
@@ -339,23 +414,39 @@ def get_opportunities():
             vt = float(df['Volume'].iloc[-1])
             va = float(df['Volume'].tail(20).mean())
             vr = vt / va if va > 0 else 1.0
+            
+            # === CALCUL DE L'ATR (VOLATILITÉ) ===
+            atr_ind = ta.volatility.AverageTrueRange(high=df['High'], low=df['Low'], close=df['Close'], window=14)
+            atr_val = float(atr_ind.average_true_range().iloc[-1])
+            atr_pct = (atr_val / cp) * 100 if cp > 0 else 0
+
+            # Calcul du Momentum (5 derniers jours) pour éviter les "couteaux qui tombent"
+            p_5d_ago = float(df['Close'].iloc[-5]) if len(df) >= 5 else pc
+            momentum_5d = ((cp - p_5d_ago) / p_5d_ago) * 100
 
             score, reasons = 0, []
-            if rsi < 25: score += 35; reasons.append(f"RSI extrÃªmement survendu ({rsi:.0f})")
+            if rsi < 25: score += 35; reasons.append(f"RSI extrêmement survendu ({rsi:.0f})")
             elif rsi < 35: score += 25; reasons.append(f"RSI survendu ({rsi:.0f})")
-            elif rsi < 45: score += 10; reasons.append(f"RSI zone opportunitÃ© ({rsi:.0f})")
-            if mh > 0 and mv < 0: score += 25; reasons.append("Croisement MACD haussier nÃ©gatif")
+            elif rsi < 45: score += 10; reasons.append(f"RSI zone opportunité ({rsi:.0f})")
+            
+            # Protection Couteau qui tombe
+            if rsi < 35 and momentum_5d < -8.0:
+                score -= 20; reasons.append("⚠️ Prudence : Chute récente trop brutale (Attendre rebond)")
+                
+            if mh > 0 and mv < 0: score += 25; reasons.append("Croisement MACD haussier négatif")
             elif mh > 0: score += 10; reasons.append("MACD haussier")
             if pfl < 10: score += 25; reasons.append(f"Proche bas 52s ({pfl:.0f}%)")
             elif pfl < 20: score += 15; reasons.append(f"Zone basse annuelle ({pfl:.0f}%)")
-            if vr > 2.0: score += 15; reasons.append(f"Volume Ã—{vr:.1f}")
-            elif vr > 1.5: score += 8; reasons.append(f"Volume Ã—{vr:.1f}")
+            if vr > 2.0: score += 15; reasons.append(f"Volume ×{vr:.1f}")
+            elif vr > 1.5: score += 8; reasons.append(f"Volume ×{vr:.1f}")
+
+            if atr_pct > 3.0: score += 5; reasons.append(f"Forte volatilité ATR ({atr_pct:.1f}%)")
 
             score = min(score, 100)
             if score >= 20:
-                label = "FORTE OPPORTUNITÃ‰" if score >= 70 else "OPPORTUNITÃ‰" if score >= 45 else "Ã€ SURVEILLER"
+                label = "FORTE OPPORTUNITÉ" if score >= 70 else "OPPORTUNITÉ" if score >= 45 else "À SURVEILLER"
                 results.append({"isin": isin, "name": name, "price": round(cp, 2), "change": chg,
-                                "score": score, "label": label, "rsi": round(rsi, 1),
+                                "score": score, "label": label, "rsi": round(rsi, 1), "atr": round(atr_pct, 2),
                                 "reasons": reasons, "high52": round(h52, 2), "low52": round(l52, 2)})
         except Exception as e:
             print(f"Opp error {ticker}: {e}")
@@ -428,9 +519,9 @@ async def run_bg_task():
                     df_t = df_t.dropna(subset=['Close'])
                     cp = float(df_t['Close'].iloc[-1])
                     if alert['type'] == 'above' and cp >= alert['price']:
-                        notifs.append(f"{nm} > {alert['price']}â‚¬ (Act: {cp:.2f}â‚¬)"); alert['triggered'] = True
+                        notifs.append(f"{nm} > {alert['price']}€ (Act: {cp:.2f}€)"); alert['triggered'] = True
                     elif alert['type'] == 'below' and cp <= alert['price']:
-                        notifs.append(f"{nm} < {alert['price']}â‚¬ (Act: {cp:.2f}â‚¬)"); alert['triggered'] = True
+                        notifs.append(f"{nm} < {alert['price']}€ (Act: {cp:.2f}€)"); alert['triggered'] = True
                 except: pass
             if notifs:
                 with open("alerts.json", "w") as f: json.dump(alerts, f)

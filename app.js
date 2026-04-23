@@ -24,6 +24,28 @@ const STATE = {
     lastAiSignals: {}
 };
 
+/* =================== APK / MOBILE WRAPPER INIT =================== */
+// Préparation pour Cordova / Capacitor ou PhoneGap.
+// L'événement 'deviceready' est déclenché par le Webview natif quand l'app est prête.
+document.addEventListener('deviceready', () => {
+    console.log("APK Device Ready - Native functionalities enabled.");
+    // Gérer le bouton retour matériel sur Android (Backbutton)
+    document.addEventListener('backbutton', (e) => {
+        const currentTab = document.querySelector('.tab.active').id;
+        if (currentTab !== 'tab-home') {
+            e.preventDefault();
+            switchTab('home'); // Ramène au dashboard au lieu de fermer l'app
+        } else {
+            // Laisse l'app se fermer
+        }
+    }, false);
+    
+    // Reprise de l'application (Sortie de veille de l'OS) -> Force l'actualisation
+    document.addEventListener('resume', () => {
+        if (STATE.marketOpen) silentPriceRefresh();
+    }, false);
+}, false);
+
 /* =================== INIT =================== */
 document.addEventListener('DOMContentLoaded', async () => {
     setupNavigation();
@@ -39,19 +61,28 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Ajout listeners pour Prédiction 1h et Tout actualiser à chaque affichage du dashboard
     function setupPredictionAndRefreshListeners() {
-        const predictBtn = document.getElementById('predict-1h-btn');
+        const predictBtn = document.getElementById('trend-committee-btn');
         if (predictBtn && !predictBtn._hasListener) {
             predictBtn.addEventListener('click', async () => {
                 await showFutureForecast();
             });
             predictBtn._hasListener = true;
         }
-        const closeForecastBtn = document.getElementById('close-forecast-panel');
+        const closeForecastBtn = document.getElementById('close-committee-panel');
         if (closeForecastBtn && !closeForecastBtn._hasListener) {
             closeForecastBtn.addEventListener('click', () => {
-                document.getElementById('future-forecast-panel').style.display = 'none';
+                document.getElementById('trend-committee-panel').style.display = 'none';
             });
             closeForecastBtn._hasListener = true;
+        }
+        const refreshCommitteeBtn = document.getElementById('refresh-committee-btn');
+        if (refreshCommitteeBtn && !refreshCommitteeBtn._hasListener) {
+            refreshCommitteeBtn.addEventListener('click', async () => {
+                refreshCommitteeBtn.classList.add('spinning');
+                await showFutureForecast();
+                setTimeout(() => refreshCommitteeBtn.classList.remove('spinning'), 500);
+            });
+            refreshCommitteeBtn._hasListener = true;
         }
         const refreshAllBtn = document.getElementById('refresh-all-btn');
         if (refreshAllBtn && !refreshAllBtn._hasListener) {
@@ -85,23 +116,57 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 // =================== PRÉDICTION FUTURE 1H ===================
 async function showFutureForecast() {
-    // Affiche le panneau et génère une prédiction simple (exemple)
-    const panel = document.getElementById('future-forecast-panel');
-    const ctx = document.getElementById('futureChart').getContext('2d');
+    const panel = document.getElementById('trend-committee-panel');
+    const ctx = document.getElementById('committeeChart').getContext('2d');
+    if (!panel || !ctx) return;
+    
+    const wasHidden = panel.style.display === 'none';
     panel.style.display = 'block';
+    if (wasHidden) {
+        setTimeout(() => panel.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50);
+    }
 
-    // Génère une prédiction simple à partir de la tendance actuelle (exemple)
     const data = STATE.currentData;
-    if (!data) return;
-    const lastPrice = data.dataseries[data.dataseries.length - 1];
-    const trend = (data.dataseries[data.dataseries.length - 1] - data.dataseries[0]) / data.dataseries.length;
+    if (!data || !data.dataseries || data.dataseries.length < 10) return;
+
+    const prices = data.dataseries;
+    const lastPrice = prices[prices.length - 1];
+
+    // Mathématiques Quantitatives : Mouvement Brownien Géométrique (GBM)
+    // Calcul des rendements logarithmiques récents
+    const lookback = Math.min(20, prices.length - 1);
+    const logReturns = [];
+    for (let i = 1; i <= lookback; i++) {
+        const pCurrent = prices[prices.length - i];
+        const pPrev = prices[prices.length - i - 1];
+        if (pPrev > 0) logReturns.push(Math.log(pCurrent / pPrev));
+    }
+    
+    // Dérive (Drift - Tendance moyenne) et Volatilité (Écart-type)
+    const meanReturn = logReturns.reduce((a, b) => a + b, 0) / (logReturns.length || 1);
+    const variance = logReturns.reduce((a, b) => a + Math.pow(b - meanReturn, 2), 0) / (logReturns.length || 1);
+    const sigma = Math.sqrt(variance) || 0.001; // Volatilité
+
+    // Ajustement par Retour à la moyenne (RSI)
+    let drift = meanReturn;
+    const rsi = data.rsi || 50;
+    if (rsi > 70) drift -= (sigma * 0.6); // Pression baissière si suracheté
+    else if (rsi < 30) drift += (sigma * 0.6); // Pression haussière si survendu
+
     const forecast = [];
     const labels = [];
     let price = lastPrice;
     for (let i = 1; i <= 12; i++) { // 12 x 5min = 1h
-        price += trend * (1 + Math.random() * 0.2 - 0.1); // bruit
+        // Transformation de Box-Muller pour obtenir un nombre aléatoire à distribution normale standard (Z)
+        let u1 = Math.random(), u2 = Math.random();
+        if (u1 === 0) u1 = 0.0001; // Éviter log(0)
+        let z = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
+        
+        // Équation GBM : S_t = S_{t-1} * exp((mu - sigma^2 / 2) + sigma * Z)
+        let shock = drift - (0.5 * Math.pow(sigma, 2)) + (sigma * z);
+        price = price * Math.exp(shock);
         forecast.push(parseFloat(price.toFixed(2)));
-        labels.push(`+${i * 5}min`);
+        labels.push(`+${i * 5}m`);
     }
     // Affiche le graphique
     if (window.futureChartObj) window.futureChartObj.destroy();
@@ -130,8 +195,12 @@ async function showFutureForecast() {
     });
     // Texte d'interprétation
     const delta = forecast[forecast.length - 1] - lastPrice;
-    const txt = delta > 0 ? `Hausse possible de ${(delta).toFixed(2)} € (+${((delta/lastPrice)*100).toFixed(1)}%) sur 1h.` : `Baisse possible de ${(delta).toFixed(2)} € (${((delta/lastPrice)*100).toFixed(1)}%) sur 1h.`;
-    document.getElementById('future-forecast-text').textContent = txt;
+    const pct = (delta / lastPrice) * 100;
+    let trendText = delta > 0 ? 'Hausse estimée' : 'Baisse estimée';
+    if (Math.abs(pct) < 0.1) trendText = 'Stagnation probable';
+
+    const txt = `${trendText} à ${(forecast[forecast.length - 1]).toFixed(2)} € (${delta > 0 ? '+' : ''}${pct.toFixed(2)}%) d'ici 1h.`;
+    document.getElementById('committee-forecast-text').textContent = txt;
 }
 });
 
@@ -455,6 +524,26 @@ function initCharts() {
                     hidden: true,
                     spanGaps: true,
                     order: 6
+                },
+                {   // Index 6: Buy Signals (Backtest)
+                    label: 'Achat (Backtest)',
+                    data: [],
+                    type: 'scatter',
+                    backgroundColor: '#22c55e',
+                    pointRadius: 6, pointHoverRadius: 8,
+                    pointStyle: 'triangle',
+                    hidden: true,
+                    order: 0
+                },
+                {   // Index 7: Sell Signals (Backtest)
+                    label: 'Vente (Backtest)',
+                    data: [],
+                    type: 'scatter',
+                    backgroundColor: '#ef4444',
+                    pointRadius: 6, pointHoverRadius: 8,
+                    pointStyle: 'triangle', rotation: 180, // Triangle inversé
+                    hidden: true,
+                    order: 0
                 }
             ]
         },
@@ -543,6 +632,13 @@ function updateChart(data) {
     chart.data.datasets[4].data = cleanArr(data.bbUpper);
     chart.data.datasets[5].data = cleanArr(data.bbLower);
 
+    // Signaux Backtest
+    const showSignals = document.getElementById('show-signals')?.checked;
+    chart.data.datasets[6].data = data.buySignals || [];
+    chart.data.datasets[7].data = data.sellSignals || [];
+    chart.data.datasets[6].hidden = !showSignals;
+    chart.data.datasets[7].hidden = !showSignals;
+
     const showVwap = document.getElementById('show-vwap')?.checked;
     chart.data.datasets[1].hidden = !showVwap;
 
@@ -552,6 +648,9 @@ function updateChart(data) {
     if (!chart.data.datasets[2].hidden && data.sma20) visiblePrices.push(...data.sma20);
     if (!chart.data.datasets[4].hidden && data.bbUpper) visiblePrices.push(...data.bbUpper);
     if (!chart.data.datasets[5].hidden && data.bbLower) visiblePrices.push(...data.bbLower);
+    if (showSignals && data.buySignals) visiblePrices.push(...cleanArr(data.buySignals));
+    if (showSignals && data.sellSignals) visiblePrices.push(...cleanArr(data.sellSignals));
+
     const filtered = visiblePrices.filter(v => v != null && isFinite(v) && v > 0);
     if (filtered.length > 0) {
         const minP = Math.min(...filtered), maxP = Math.max(...filtered);
@@ -592,12 +691,15 @@ function rescaleYAxis() {
     const showVwap = document.getElementById('show-vwap')?.checked;
     const showSma = document.getElementById('show-sma')?.checked;
     const showBb = document.getElementById('show-bb')?.checked;
+    const showSignals = document.getElementById('show-signals')?.checked;
     const cleanArr = (arr) => arr ? arr.filter(v => v != null && isFinite(v) && v > 0) : [];
     if (showVwap && data.vwapSeries) visiblePrices.push(...cleanArr(data.vwapSeries));
     if (showSma && data.sma20) visiblePrices.push(...cleanArr(data.sma20));
     if (showSma && data.sma50) visiblePrices.push(...cleanArr(data.sma50));
     if (showBb && data.bbUpper) visiblePrices.push(...cleanArr(data.bbUpper));
     if (showBb && data.bbLower) visiblePrices.push(...cleanArr(data.bbLower));
+    if (showSignals && data.buySignals) visiblePrices.push(...cleanArr(data.buySignals));
+    if (showSignals && data.sellSignals) visiblePrices.push(...cleanArr(data.sellSignals));
     const filtered = visiblePrices.filter(v => v != null && isFinite(v) && v > 0);
     if (filtered.length > 0) {
         const minP = Math.min(...filtered), maxP = Math.max(...filtered);
@@ -660,7 +762,7 @@ function switchChartType(type, data) {
                     callbacks: { label: (ctx) => ` O:${ctx.parsed.o?.toFixed(2)} H:${ctx.parsed.h?.toFixed(2)} L:${ctx.parsed.l?.toFixed(2)} C:${ctx.parsed.c?.toFixed(2)}` }
                 }},
                 scales: {
-                    x: { ticks: { font: { size: 10 }, maxTicksLimit: 8, color: '#475569' }, grid: { color: 'rgba(71,85,105,0.15)' } },
+                    x: { type: 'category', ticks: { font: { size: 10 }, maxTicksLimit: 8, color: '#475569' }, grid: { color: 'rgba(71,85,105,0.15)' } },
                     y: { position: 'right', beginAtZero: false, min: candleYMin, max: candleYMax, ticks: { font: { size: 10, family: "'JetBrains Mono'" }, color: '#475569', callback: (v) => v.toFixed(2) }, grid: { color: 'rgba(71,85,105,0.15)' } }
                 }
             }
@@ -682,7 +784,9 @@ function switchChartType(type, data) {
                 { label: 'SMA 20', data: [], borderColor: '#f59e0b', borderWidth: 1.2, pointRadius: 0, fill: false, tension: 0.3, hidden: true, spanGaps: true, order: 3 },
                 { label: 'SMA 50', data: [], borderColor: '#a855f7', borderWidth: 1.2, pointRadius: 0, fill: false, tension: 0.3, hidden: true, spanGaps: true, order: 4 },
                 { label: 'BB Haut', data: [], borderColor: 'rgba(148,163,184,0.5)', borderWidth: 1, borderDash: [2,2], pointRadius: 0, fill: false, tension: 0.3, hidden: true, spanGaps: true, order: 5 },
-                { label: 'BB Bas', data: [], borderColor: 'rgba(148,163,184,0.5)', borderWidth: 1, borderDash: [2,2], pointRadius: 0, backgroundColor: 'rgba(148,163,184,0.08)', fill: '-1', tension: 0.3, hidden: true, spanGaps: true, order: 6 }
+                { label: 'BB Bas', data: [], borderColor: 'rgba(148,163,184,0.5)', borderWidth: 1, borderDash: [2,2], pointRadius: 0, backgroundColor: 'rgba(148,163,184,0.08)', fill: '-1', tension: 0.3, hidden: true, spanGaps: true, order: 6 },
+                { label: 'Achat', data: [], type: 'scatter', backgroundColor: '#22c55e', pointRadius: 6, pointHoverRadius: 8, pointStyle: 'triangle', hidden: true, order: 0 },
+                { label: 'Vente', data: [], type: 'scatter', backgroundColor: '#ef4444', pointRadius: 6, pointHoverRadius: 8, pointStyle: 'triangle', rotation: 180, hidden: true, order: 0 }
             ]},
             options: STATE.priceChart?.options || {}
         });
@@ -743,11 +847,19 @@ function switchChartType(type, data) {
     if (chart.data.datasets[3]) chart.data.datasets[3].data = cleanArr2(data.sma50);
     if (chart.data.datasets[4]) chart.data.datasets[4].data = cleanArr2(data.bbUpper);
     if (chart.data.datasets[5]) chart.data.datasets[5].data = cleanArr2(data.bbLower);
+    
+    const showSignals = document.getElementById('show-signals')?.checked;
+    if (chart.data.datasets[6]) { chart.data.datasets[6].data = cleanArr2(data.buySignals); chart.data.datasets[6].hidden = !showSignals; }
+    if (chart.data.datasets[7]) { chart.data.datasets[7].data = cleanArr2(data.sellSignals); chart.data.datasets[7].hidden = !showSignals; }
 
     // Auto-scale Y axis
-    const prices2 = [...data.dataseries, ...(showVwap2 ? cleanVwap2 : [])].filter(v => v != null && isFinite(v) && v > 0);
-    if (prices2.length > 0) {
-        const mn = Math.min(...prices2), mx = Math.max(...prices2);
+    const prices2 = [...data.dataseries, ...(showVwap2 ? cleanVwap2 : [])];
+    if (showSignals && data.buySignals) prices2.push(...cleanArr2(data.buySignals));
+    if (showSignals && data.sellSignals) prices2.push(...cleanArr2(data.sellSignals));
+    
+    const filtered2 = prices2.filter(v => v != null && isFinite(v) && v > 0);
+    if (filtered2.length > 0) {
+        const mn = Math.min(...filtered2), mx = Math.max(...filtered2);
         const rng = mx - mn || mx * 0.02, pad = rng * 0.15;
         chart.options.scales.y.min = Math.floor((mn - pad) * 100) / 100;
         chart.options.scales.y.max = Math.ceil((mx + pad) * 100) / 100;
@@ -942,8 +1054,8 @@ function renderOpportunities(opportunities) {
                     <strong style="color:${opp.rsi < 35 ? 'var(--green)' : opp.rsi > 70 ? 'var(--red)' : 'var(--text)'}">${opp.rsi}</strong>
                 </div>
                 <div class="opp-stat">
-                    <span class="opp-stat-label">52w Bas</span>
-                    <strong>${opp.low52?.toFixed(2) ?? '--'} €</strong>
+                    <span class="opp-stat-label">Volatilité ATR</span>
+                    <strong style="color:var(--accent)">${opp.atr ?? '--'} %</strong>
                 </div>
             </div>
             <div class="opp-reasons">
@@ -1229,9 +1341,13 @@ function setupControls() {
     // Timeframe buttons
     document.querySelectorAll('.tf-btn').forEach(btn => {
         btn.addEventListener('click', async () => {
-            document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
+            const tf = btn.getAttribute('data-tf');
+            if (!tf) return; // Ignore le bouton "Comité de tendance" qui n'a pas de data-tf
+
+            document.querySelectorAll('.tf-btn').forEach(b => {
+                if (b.hasAttribute('data-tf')) b.classList.remove('active');
+            });
             btn.classList.add('active');
-            STATE.currentTimeframe = btn.getAttribute('data-tf');
             await loadAssetDetail(STATE.currentIsin);
         });
     });
@@ -1267,6 +1383,17 @@ function setupControls() {
             const show = bbToggle.checked;
             STATE.priceChart.data.datasets[4].hidden = !show;
             STATE.priceChart.data.datasets[5].hidden = !show;
+            rescaleYAxis();
+        }
+    });
+
+    // Backtest Signals toggle
+    const sigToggle = document.getElementById('show-signals');
+    if (sigToggle) sigToggle.addEventListener('change', () => {
+        if (STATE.priceChart && STATE.priceChart.config.type !== 'candlestick') {
+            const show = sigToggle.checked;
+            STATE.priceChart.data.datasets[6].hidden = !show;
+            STATE.priceChart.data.datasets[7].hidden = !show;
             rescaleYAxis();
         }
     });

@@ -8,12 +8,16 @@
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <!-- OPTIMISATION APK : viewport-fit=cover permet d'utiliser les encoches/îlots (Notch) sur mobiles -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>PEA Tracker IA</title>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiBmaWxsPSIjMDgwYzE0IiByeD0iOCIvPjxwYXRoIGQ9Ik04IDI0TDE2IDhMMjQgMjQiIHN0cm9rZT0iIzYzNjZmMSIgc3Ryb2tlLXdpZHRoPSIzIiBmaWxsPSJub25lIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+PC9zdmc+">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.1.1/dist/chartjs-chart-financial.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.1.1/dist/chartjs-chart-financial.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+    <script defer src="./app.js"></script>
     <link rel="stylesheet" href="./style.css?v=4">
 </head>
 <body>
@@ -163,6 +167,10 @@
                             <input type="checkbox" id="show-volume">
                             <span class="toggle-label vol">VOL</span>
                         </label>
+                        <label class="indicator-toggle" title="Backtesting des signaux">
+                            <input type="checkbox" id="show-signals">
+                            <span class="toggle-label sig">SIGNAUX</span>
+                        </label>
                     </div>
                 </div>
 
@@ -170,15 +178,6 @@
                 <div class="chart-wrapper">
                     <canvas id="priceChart"></canvas>
                     <div id="chart-crosshair-value" class="crosshair-tooltip" style="display:none;"></div>
-                    <!-- Zone de comité de tendance -->
-                    <div id="trend-committee-panel" class="glass" style="display:none;margin-top:16px;padding:16px 12px 8px 12px;background:rgba(8,145,178,0.08);border-radius:12px;">
-                        <div style="display:flex;align-items:center;justify-content:space-between;">
-                            <div style="font-weight:600;color:#0891b2;">Comité de tendance IA</div>
-                            <button id="close-committee-panel" style="background:none;border:none;font-size:18px;line-height:1;color:#0891b2;cursor:pointer;">&times;</button>
-                        </div>
-                        <canvas id="committeeChart" height="120" style="margin-top:8px;"></canvas>
-                        <div id="committee-forecast-text" style="margin-top:8px;font-size:0.95rem;color:#0891b2;"></div>
-                    </div>
                 </div>
 
                 <!-- Volume Chart -->
@@ -194,6 +193,26 @@
                     <div class="stat"><span class="stat-label">VWAP</span><span class="stat-val accent" id="stat-vwap">--</span></div>
                     <div class="stat"><span class="stat-label">Vol</span><span class="stat-val" id="stat-vol">--</span></div>
                 </div>
+            </div>
+
+            <!-- Zone de comité de tendance (DÉPLACÉE EN DEHORS DU GRAPHIQUE) -->
+            <div id="trend-committee-panel" class="glass" style="display:none;margin-bottom:16px;padding:16px;background:rgba(8,145,178,0.05);border:1px solid rgba(8,145,178,0.2);">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+                    <div style="font-weight:600;color:#0891b2;display:flex;align-items:center;gap:8px;">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7"/></svg>
+                        Prévision Comité de tendance (1h)
+                    </div>
+                    <div style="display:flex;gap:12px;align-items:center;">
+                        <button id="refresh-committee-btn" title="Rafraîchir la prédiction" style="background:none;border:none;color:#0891b2;cursor:pointer;display:flex;align-items:center;justify-content:center;">
+                            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                        </button>
+                        <button id="close-committee-panel" title="Fermer" style="background:none;border:none;font-size:24px;line-height:1;color:#0891b2;cursor:pointer;">&times;</button>
+                    </div>
+                </div>
+                <div style="position:relative;width:100%;height:180px;">
+                    <canvas id="committeeChart"></canvas>
+                </div>
+                <div id="committee-forecast-text" style="margin-top:12px;font-size:0.95rem;color:#0891b2;text-align:center;font-weight:500;"></div>
             </div>
 
             <!-- AI + INDICATORS GRID -->
@@ -488,6 +507,5 @@
         </button>
     </nav>
 </div>
-<script src="./app.js"></script>
 </body>
 </html>

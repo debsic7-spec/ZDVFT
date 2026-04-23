@@ -1,0 +1,6 @@
+{
+  "appId": "com.peatracker.app",
+  "appName": "PEA Tracker IA",
+  "webDir": "www",
+  "bundledWebRuntime": false
+}

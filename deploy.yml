@@ -1,0 +1,46 @@
+# Fichier : .github/workflows/deploy.yml
+name: Déployer sur Render
+
+# Déclenche le workflow à chaque push sur la branche 'main'
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout du code
+        uses: actions/checkout@v4
+
+      - name: Configuration de Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10' # Version de Python compatible avec Render
+
+      - name: Installation des dépendances
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install ruff  # Outil de vérification de la qualité du code
+
+      - name: Analyse du code avec Ruff
+        run: |
+          # Vérifie les erreurs et problèmes de style dans le code Python
+          ruff check . --output-format=github
+
+      - name: Exécution des tests unitaires (Pytest)
+        run: |
+          # Lance la suite de tests unitaires via pytest
+          # Calcule également la couverture de code sur le dossier backend/
+          PYTHONPATH=. pytest tests/ -v --cov=backend --cov-report=term-missing
+
+  deploy:
+    name: Déploiement sur Render
+    needs: build # Ne se lance que si le job 'build' a réussi
+    runs-on: ubuntu-latest
+    steps:
+      - name: Déclenchement du Deploy Hook de Render
+        run: curl -X POST ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
