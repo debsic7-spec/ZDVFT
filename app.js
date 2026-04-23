@@ -12,7 +12,7 @@ const STATE = {
     allAssets: [],
     priceChart: null,
     volumeChart: null,
-    currentTimeframe: localStorage.getItem('pea_default_tf') || '1d',
+    currentTimeframe: (localStorage.getItem('pea_default_tf') && localStorage.getItem('pea_default_tf') !== 'null' && localStorage.getItem('pea_default_tf') !== 'undefined') ? localStorage.getItem('pea_default_tf') : '1d',
     chartType: 'line',
     currentData: null,
     apiOnline: false,
@@ -1348,6 +1348,7 @@ function setupControls() {
                 if (b.hasAttribute('data-tf')) b.classList.remove('active');
             });
             btn.classList.add('active');
+            STATE.currentTimeframe = tf;
             await loadAssetDetail(STATE.currentIsin);
         });
     });
